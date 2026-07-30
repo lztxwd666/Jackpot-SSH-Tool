@@ -14,10 +14,8 @@ pub fn authenticate(session: &Session, username: &str, auth_method: &AuthMethod)
             tracing::info!(username, "password authentication succeeded");
         }
         AuthMethod::PrivateKey { path, passphrase } => {
-            let key_data = std::fs::read_to_string(path)
-                .map_err(|e| core_common::CoreError::Internal(format!("failed to read private key {}: {e}", path.display())))?;
             let pass = passphrase.as_deref();
-            session.userauth_pubkey_memory(username, None, &key_data, pass)
+            session.userauth_pubkey_file(username, None, path.as_path(), pass)
                 .map_err(|e| core_common::CoreError::Internal(format!("publickey auth failed: {e}")))?;
             tracing::info!(username, key_path = %path.display(), "publickey authentication succeeded");
         }

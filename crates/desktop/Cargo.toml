@@ -3,6 +3,10 @@ name = "desktop"
 version.workspace = true
 edition.workspace = true
 
+[[bin]]
+name = "desktop_app"
+path = "src/main.rs"
+
 [lib]
 name = "desktop"
 crate-type = ["staticlib", "cdylib", "rlib"]
