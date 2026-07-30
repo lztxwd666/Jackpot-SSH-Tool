@@ -17,7 +17,7 @@ use crate::connection_service::{ConnectionService, SshConnectionService};
 pub struct CoreRuntime {
     config: Box<dyn Config>,
     dispatcher: Arc<ChannelDispatcher>,
-    db: Arc<RwLock<Option<Database>>>,
+    db: Arc<RwLock<Option<Arc<Database>>>>,
     running: RwLock<bool>,
     connection_service: RwLock<Option<Arc<dyn ConnectionService>>>,
     known_hosts: RwLock<Option<Arc<dyn KnownHostsProvider>>>,
@@ -48,18 +48,15 @@ impl CoreRuntime {
     }
 
     /// 启动运行时：打开数据库、执行迁移、初始化连接服务和 KnownHosts Provider
-    /// 反防护重复启动，二次调用返回 Internal error
+    /// 防止重复启动，二次调用返回 Internal error
     pub async fn start(&self) -> CoreResult<()> {
         {
-            let running = self.running.read().await;
+            let mut running = self.running.write().await;
             if *running {
                 return Err(core_common::CoreError::Internal(
                     "runtime already started".into(),
                 ));
             }
-        }
-        {
-            let mut running = self.running.write().await;
             *running = true;
         }
 
@@ -80,9 +77,7 @@ impl CoreRuntime {
 
         {
             let mut db_lock = self.db.write().await;
-            *db_lock = Some(Arc::try_unwrap(db_arc).unwrap_or_else(|_arc| {
-                panic!("Database Arc still has references")
-            }));
+            *db_lock = Some(db_arc.clone());
         }
         {
             let mut kh_lock = self.known_hosts.write().await;
@@ -134,8 +129,12 @@ impl CoreRuntime {
         // 再关闭数据库
         {
             let mut db_lock = self.db.write().await;
-            if let Some(db) = db_lock.take() {
-                let _ = db.close();
+            if let Some(db_arc) = db_lock.take() {
+                if let Ok(db) = Arc::try_unwrap(db_arc) {
+                    let _ = db.close();
+                } else {
+                    tracing::warn!("Database Arc still has references during shutdown");
+                }
             }
         }
 
