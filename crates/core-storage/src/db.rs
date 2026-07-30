@@ -1,14 +1,21 @@
+//! 数据库连接管理模块
+
 use core_common::CoreResult;
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::migrations;
 
+/// SQLite 数据库连接管理器
+/// 内部使用 Mutex 保护连接，确保跨线程安全访问
+/// 连接使用 Option 包裹以支持 close() 后置空
 pub struct Database {
     conn: Mutex<Option<rusqlite::Connection>>,
 }
 
 impl Database {
+    /// 在指定目录创建或打开 SQLite 数据库文件
+    /// 自动启用 WAL 日志模式和 foreign key 约束
     pub fn open(data_dir: &Path) -> CoreResult<Self> {
         std::fs::create_dir_all(data_dir)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
@@ -25,6 +32,7 @@ impl Database {
         })
     }
 
+    /// 执行 schema 迁移，将数据库升级到最新版本
     pub fn migrate(&self) -> CoreResult<()> {
         let guard = self
             .conn
@@ -36,6 +44,8 @@ impl Database {
         migrations::run_migrations(conn)
     }
 
+    /// 在数据库连接上执行任意操作
+    /// 这是唯一暴露连接的接口，外部无法直接获取 MutexGuard，保证锁使用安全
     pub fn execute<F, T>(&self, f: F) -> CoreResult<T>
     where
         F: FnOnce(&rusqlite::Connection) -> CoreResult<T>,
@@ -50,6 +60,7 @@ impl Database {
         f(conn)
     }
 
+    /// 关闭数据库连接并释放资源，消耗 self 以防后续误用
     pub fn close(self) -> CoreResult<()> {
         let mut guard = self
             .conn
@@ -81,11 +92,11 @@ mod tests {
 
         let version: i32 = db
             .execute(|conn| {
-                conn.query_row("SELECT version FROM _schema_version", [], |row| row.get(0))
+                conn.query_row("SELECT MAX(version) FROM _schema_version", [], |row| row.get(0))
                     .map_err(|e| core_common::CoreError::Storage(Box::new(e)))
             })
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
 
         db.close().unwrap();
         std::fs::remove_dir_all(&dir).ok();
