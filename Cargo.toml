@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/jackpot-core-common",
-    "crates/jackpot-core-event",
-    "crates/jackpot-core-runtime",
-    "crates/jackpot-core-storage",
-    "crates/jackpot-tauri",
+    "crates/core-common",
+    "crates/core-event",
+    "crates/core-runtime",
+    "crates/core-storage",
+    "crates/desktop",
 ]
 
 [workspace.package]

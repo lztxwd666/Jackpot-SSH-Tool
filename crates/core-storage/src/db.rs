@@ -1,4 +1,4 @@
-use jackpot_core_common::CoreResult;
+use core_common::CoreResult;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -11,14 +11,14 @@ pub struct Database {
 impl Database {
     pub fn open(data_dir: &Path) -> CoreResult<Self> {
         std::fs::create_dir_all(data_dir)
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
         let db_path = data_dir.join("jackpot.db");
         let conn = rusqlite::Connection::open(&db_path)
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
         Ok(Self {
             conn: Mutex::new(Some(conn)),
@@ -29,10 +29,10 @@ impl Database {
         let guard = self
             .conn
             .lock()
-            .map_err(|e| jackpot_core_common::CoreError::Internal(e.to_string()))?;
+            .map_err(|e| core_common::CoreError::Internal(e.to_string()))?;
         let conn = guard
             .as_ref()
-            .ok_or_else(|| jackpot_core_common::CoreError::Internal("database closed".into()))?;
+            .ok_or_else(|| core_common::CoreError::Internal("database closed".into()))?;
         migrations::run_migrations(conn)
     }
 
@@ -43,10 +43,10 @@ impl Database {
         let guard = self
             .conn
             .lock()
-            .map_err(|e| jackpot_core_common::CoreError::Internal(e.to_string()))?;
+            .map_err(|e| core_common::CoreError::Internal(e.to_string()))?;
         let conn = guard
             .as_ref()
-            .ok_or_else(|| jackpot_core_common::CoreError::Internal("database closed".into()))?;
+            .ok_or_else(|| core_common::CoreError::Internal("database closed".into()))?;
         f(conn)
     }
 
@@ -54,10 +54,10 @@ impl Database {
         let mut guard = self
             .conn
             .lock()
-            .map_err(|e| jackpot_core_common::CoreError::Internal(e.to_string()))?;
+            .map_err(|e| core_common::CoreError::Internal(e.to_string()))?;
         if let Some(conn) = guard.take() {
             conn.close()
-                .map_err(|(_conn, e)| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+                .map_err(|(_conn, e)| core_common::CoreError::Storage(Box::new(e)))?;
         }
         Ok(())
     }
@@ -82,7 +82,7 @@ mod tests {
         let version: i32 = db
             .execute(|conn| {
                 conn.query_row("SELECT version FROM _schema_version", [], |row| row.get(0))
-                    .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))
+                    .map_err(|e| core_common::CoreError::Storage(Box::new(e)))
             })
             .unwrap();
         assert_eq!(version, 1);
@@ -102,7 +102,7 @@ mod tests {
                 "INSERT INTO hosts (id, name, address, port, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 ["test-id", "test-host", "192.168.1.1", "22", "2026-01-01", "2026-01-01"],
             )
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
             Ok(())
         })
         .unwrap();

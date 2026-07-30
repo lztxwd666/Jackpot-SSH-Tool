@@ -1,7 +1,7 @@
 mod commands;
 
 use commands::AppState;
-use jackpot_core_common::DefaultConfig;
+use core_common::DefaultConfig;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -14,7 +14,7 @@ pub fn run() {
                 "info".to_string(),
             ));
 
-            let runtime = jackpot_core_runtime::CoreRuntime::new(config);
+            let runtime = core_runtime::CoreRuntime::new(config);
             let dispatcher = runtime.dispatcher();
             let mut event_rx = dispatcher.subscribe();
 

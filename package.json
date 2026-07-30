@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "cd crates/jackpot-tauri && npm run dev",
-    "build": "cd crates/jackpot-tauri && npm run build"
+    "dev": "cd crates/desktop && npm run dev",
+    "build": "cd crates/desktop && npm run build"
   }
 }

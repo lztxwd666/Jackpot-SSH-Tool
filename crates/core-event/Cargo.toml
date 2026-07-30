@@ -1,5 +1,5 @@
 [package]
-name = "jackpot-core-event"
+name = "core-event"
 version.workspace = true
 edition.workspace = true
 
@@ -8,4 +8,4 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-jackpot-core-common = { path = "../jackpot-core-common" }
+core-common = { path = "../core-common" }

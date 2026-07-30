@@ -1,0 +1,11 @@
+[package]
+name = "core-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio.workspace = true
+tracing.workspace = true
+core-common = { path = "../core-common" }
+core-event = { path = "../core-event" }
+core-storage = { path = "../core-storage" }

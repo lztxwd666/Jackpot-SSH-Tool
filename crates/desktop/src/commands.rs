@@ -3,7 +3,7 @@ use tauri::State;
 use tokio::sync::RwLock;
 
 pub struct AppState {
-    pub runtime: RwLock<Option<jackpot_core_runtime::CoreRuntime>>,
+    pub runtime: RwLock<Option<core_runtime::CoreRuntime>>,
 }
 
 #[tauri::command]

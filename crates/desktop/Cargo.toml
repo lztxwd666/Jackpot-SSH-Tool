@@ -1,10 +1,10 @@
 [package]
-name = "jackpot-tauri"
+name = "desktop"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-name = "jackpot_tauri"
+name = "desktop"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -16,7 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-jackpot-core-common = { path = "../jackpot-core-common" }
-jackpot-core-event = { path = "../jackpot-core-event" }
-jackpot-core-runtime = { path = "../jackpot-core-runtime" }
+core-common = { path = "../core-common" }
+core-event = { path = "../core-event" }
+core-runtime = { path = "../core-runtime" }
 

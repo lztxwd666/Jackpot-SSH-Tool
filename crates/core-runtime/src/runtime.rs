@@ -1,8 +1,8 @@
-use jackpot_core_common::config::Config;
-use jackpot_core_common::CoreResult;
-use jackpot_core_event::event::{ApplicationEvent, CoreEvent};
-use jackpot_core_event::{ChannelDispatcher, EventDispatcher};
-use jackpot_core_storage::Database;
+use core_common::config::Config;
+use core_common::CoreResult;
+use core_event::event::{ApplicationEvent, CoreEvent};
+use core_event::{ChannelDispatcher, EventDispatcher};
+use core_storage::Database;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -36,7 +36,7 @@ impl CoreRuntime {
         {
             let running = self.running.read().await;
             if *running {
-                return Err(jackpot_core_common::CoreError::Internal(
+                return Err(core_common::CoreError::Internal(
                     "runtime already started".into(),
                 ));
             }

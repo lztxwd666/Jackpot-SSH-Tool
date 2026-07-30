@@ -1,4 +1,4 @@
-use jackpot_core_common::CoreResult;
+use core_common::CoreResult;
 
 const SCHEMA_VERSION: i32 = 1;
 
@@ -38,9 +38,9 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
 
     if current_version < 1 {
         conn.execute_batch(MIGRATION_V1)
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         conn.execute("INSERT INTO _schema_version (version) VALUES (?1)", [SCHEMA_VERSION])
-            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tracing::info!("database migrated to version 1");
     }
 

@@ -1,5 +1,5 @@
 [package]
-name = "jackpot-core-storage"
+name = "core-storage"
 version.workspace = true
 edition.workspace = true
 
@@ -8,7 +8,7 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 tracing.workspace = true
-jackpot-core-common = { path = "../jackpot-core-common" }
+core-common = { path = "../core-common" }
 
 [dev-dependencies]
 uuid.workspace = true
