@@ -1,6 +1,7 @@
 //! 事件枚举定义模块
 //! 所有事件均不可变，描述已经发生的事情，携带最小必要 payload
 
+use core_common::{ChannelId, ChannelType, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// 顶层事件枚举，按来源划分为 Application 和 System 两类
@@ -13,6 +14,8 @@ pub enum CoreEvent {
     Connection(ConnectionEvent),
     HostKey(HostKeyEvent),
     Credential(CredentialEvent),
+    Session(SessionEvent),
+    Channel(ChannelEvent),
 }
 
 /// 应用生命周期事件
@@ -83,6 +86,40 @@ pub enum CredentialEvent {
     NotFound(String),
     /// 凭据访问被拒绝（权限问题）
     AccessDenied(String),
+}
+
+/// Session 生命周期事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail")]
+pub enum SessionEvent {
+    /// Session 已创建
+    Created { session_id: SessionId },
+    /// 正在连接远端主机
+    Connecting { session_id: SessionId, host: String, port: u16 },
+    /// 连接成功，可以打开 Channel
+    Connected { session_id: SessionId },
+    /// 连接已断开（可重连）
+    Disconnected { session_id: SessionId },
+    /// 正在第 attempt 次重连尝试
+    Reconnecting { session_id: SessionId, attempt: u32 },
+    /// 重连失败，已达最大重试次数
+    ReconnectFailed { session_id: SessionId, reason: String },
+    /// Session 永久关闭，不可再连接
+    Closed { session_id: SessionId },
+}
+
+/// SSH 通道生命周期事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail")]
+pub enum ChannelEvent {
+    /// 通道正在打开
+    Opening { session_id: SessionId, channel_id: ChannelId, channel_type: ChannelType },
+    /// 通道已打开，可以读写
+    Opened { session_id: SessionId, channel_id: ChannelId },
+    /// 收到远端数据
+    DataReceived { session_id: SessionId, channel_id: ChannelId, data: Vec<u8> },
+    /// 通道已关闭
+    Closed { session_id: SessionId, channel_id: ChannelId },
 }
 
 #[cfg(test)]

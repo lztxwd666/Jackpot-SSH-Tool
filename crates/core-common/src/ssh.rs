@@ -64,3 +64,59 @@ impl HostKeyInfo {
         Self { host, port, key_type, fingerprint }
     }
 }
+
+/// Session 生命周期状态
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionState {
+    Created,
+    Connecting,
+    Connected,
+    Disconnected,
+    Closed,
+}
+
+/// SSH 通道类型
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChannelType {
+    Shell,
+    Sftp,
+    Exec,
+}
+
+/// 通道生命周期状态
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChannelState {
+    Opening,
+    Open,
+    Closing,
+    Closed,
+}
+
+/// 重连策略配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReconnectPolicy {
+    /// 最大重试次数，0 表示不重连
+    pub max_retries: u32,
+    /// 指数退避的基础延迟（秒）
+    pub base_delay_secs: u64,
+    /// 最大延迟上限（秒）
+    pub max_delay_secs: u64,
+}
+
+impl ReconnectPolicy {
+    /// 计算第 attempt 次重试的延迟（attempt 从 1 开始）
+    pub fn delay_for(&self, attempt: u32) -> u64 {
+        let delay = self.base_delay_secs.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)));
+        delay.min(self.max_delay_secs)
+    }
+}
+
+impl Default for ReconnectPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries: 5,
+            base_delay_secs: 1,
+            max_delay_secs: 30,
+        }
+    }
+}
