@@ -1,5 +1,10 @@
+//! 项目统一错误类型模块
+//! 使用 thiserror 派生宏避免手动实现 Display/Error trait
+
 use thiserror::Error;
 
+/// 核心错误枚举，覆盖所有子系统可能产生的错误
+/// 各变体携带不同粒度的上下文信息，便于上层展示或记录
 #[derive(Error, Debug)]
 pub enum CoreError {
     #[error("internal error: {0}")]
@@ -18,4 +23,5 @@ pub enum CoreError {
     InvalidArgument(String),
 }
 
+/// 项目统一的 Result 别名，简化函数签名
 pub type CoreResult<T> = Result<T, CoreError>;

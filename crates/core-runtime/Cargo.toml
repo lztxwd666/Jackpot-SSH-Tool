@@ -10,3 +10,4 @@ core-common = { path = "../core-common" }
 core-event = { path = "../core-event" }
 core-storage = { path = "../core-storage" }
 ssh2 = "0.9"
+base64 = "0.22"

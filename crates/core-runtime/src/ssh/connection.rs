@@ -2,8 +2,8 @@
 //! 封装 ssh2::Session，管理 TCP 连接、SSH 握手、认证和断开的整个生命周期
 //! 所有 SSH I/O 操作通过 emit_event 回调报告状态变化
 
-use core_common::{ConnectionConfig, CoreResult};
-use core_event::event::{ConnectionEvent, CoreEvent};
+use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider};
+use core_event::event::{ConnectionEvent, CoreEvent, HostKeyEvent};
 use core_event::EventDispatcher;
 use ssh2::Session;
 use std::net::TcpStream;
@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::auth::authenticate;
-#[allow(unused_imports)]
 use super::hostkey::check_host_key;
 
 /// SSH 连接实例，封装 ssh2::Session 的生命周期管理
@@ -19,15 +18,21 @@ pub struct SshConnection {
     config: ConnectionConfig,
     session: Option<Session>,
     dispatcher: Arc<dyn EventDispatcher>,
+    known_hosts: Option<Arc<dyn KnownHostsProvider>>,
 }
 
 impl SshConnection {
     /// 创建新的 SSH 连接实例，配置请求但尚未建立网络连接
-    pub fn new(config: ConnectionConfig, dispatcher: Arc<dyn EventDispatcher>) -> Self {
+    pub fn new(
+        config: ConnectionConfig,
+        dispatcher: Arc<dyn EventDispatcher>,
+        known_hosts: Option<Arc<dyn KnownHostsProvider>>,
+    ) -> Self {
         Self {
             config,
             session: None,
             dispatcher,
+            known_hosts,
         }
     }
 
@@ -66,6 +71,30 @@ impl SshConnection {
 
         // HostKey 验证
         self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::HostKeyVerifying));
+
+        let host_key_info = check_host_key(&session, &self.config.host, self.config.port)?;
+
+        if let Some(ref known_hosts) = self.known_hosts {
+            match known_hosts.find_host_key(&self.config.host, self.config.port)? {
+                None => {
+                    self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Unknown {
+                        host: self.config.host.clone(),
+                        fingerprint: host_key_info.fingerprint.clone(),
+                    }));
+                }
+                Some(stored) => {
+                    if stored.fingerprint == host_key_info.fingerprint {
+                        self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Accepted));
+                    } else {
+                        self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Rejected));
+                        return Err(core_common::CoreError::Internal(format!(
+                            "host key verification failed for {}: fingerprint mismatch",
+                            self.config.host
+                        )));
+                    }
+                }
+            }
+        }
 
         // 认证
         authenticate(&session, &self.config.username, &self.config.auth_method)?;

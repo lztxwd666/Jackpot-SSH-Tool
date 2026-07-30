@@ -16,8 +16,6 @@
 - All public types must implement Debug, Clone, Serialize, Deserialize
 - Run `cargo build` and `cargo test` after each task
 - No emojis in code or comments
-- No comments unless structurally necessary (module-level doc comments only for crate-level docs)
-
 ## File Structure
 
 ```

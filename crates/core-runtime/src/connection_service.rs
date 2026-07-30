@@ -60,7 +60,7 @@ impl ConnectionService for SshConnectionService {
             ));
         }
 
-        let mut conn = SshConnection::new(config, Arc::clone(&self.dispatcher));
+        let mut conn = SshConnection::new(config, Arc::clone(&self.dispatcher), self.known_hosts.clone());
         conn.connect()?;
         *guard = Some(conn);
         Ok(())
@@ -78,10 +78,12 @@ impl ConnectionService for SshConnectionService {
     }
 
     fn is_connected(&self) -> bool {
-        self.connection
-            .lock()
-            .ok()
-            .and_then(|guard| guard.as_ref().map(|conn| conn.is_connected()))
-            .unwrap_or(false)
+        match self.connection.lock() {
+            Ok(guard) => guard.as_ref().map(|conn| conn.is_connected()).unwrap_or(false),
+            Err(e) => {
+                tracing::warn!("lock connection mutex in is_connected failed: {e}");
+                false
+            }
+        }
     }
 }

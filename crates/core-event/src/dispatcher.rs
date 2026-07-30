@@ -1,12 +1,18 @@
+//! 事件分发器模块
+//! 提供 broadcast channel 和 logging 两种实现，统一通过 trait object 使用
+
 use crate::event::CoreEvent;
 use std::sync::Arc;
 
+/// 事件分发 trait，所有分发器必须实现此接口
 pub trait EventDispatcher: Send + Sync {
     fn dispatch(&self, event: CoreEvent);
 }
 
+/// 线程安全的共享分发器引用
 pub type SharedEventDispatcher = Arc<dyn EventDispatcher>;
 
+/// 仅打印日志的分发器实现，用于测试或调试场景
 pub struct LoggingDispatcher;
 
 impl EventDispatcher for LoggingDispatcher {
@@ -15,6 +21,8 @@ impl EventDispatcher for LoggingDispatcher {
     }
 }
 
+/// 基于 tokio broadcast channel 的多播分发器
+/// 每个 subscribe() 调用产生一个独立的 Receiver，支持 multiple-producer 模式
 pub struct ChannelDispatcher {
     sender: tokio::sync::broadcast::Sender<CoreEvent>,
 }

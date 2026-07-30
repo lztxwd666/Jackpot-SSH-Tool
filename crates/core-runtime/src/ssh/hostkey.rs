@@ -26,18 +26,18 @@ fn key_to_type_name(key_type_num: HostKeyType) -> String {
     match key_type_num {
         HostKeyType::Rsa => "ssh-rsa".into(),
         HostKeyType::Dss => "ssh-dss".into(),
+        HostKeyType::Ecdsa256 => "ecdsa-sha2-nistp256".into(),
+        HostKeyType::Ecdsa384 => "ecdsa-sha2-nistp384".into(),
+        HostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521".into(),
+        HostKeyType::Ed25519 => "ssh-ed25519".into(),
         _ => format!("ssh-unknown-{key_type_num:?}"),
     }
 }
 
 /// 将字节哈希转换为 Base64 指纹字符串（遵循 OpenSSH 格式: SHA256:xxxxx）
 fn format_fingerprint(hash: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut s = "SHA256:".to_string();
-    for byte in hash {
-        write!(s, "{byte:02x}").unwrap();
-    }
-    s
+    use base64::{Engine as _, engine::general_purpose};
+    format!("SHA256:{}", general_purpose::STANDARD_NO_PAD.encode(hash))
 }
 
 #[cfg(test)]
@@ -49,6 +49,7 @@ mod tests {
         let hash = [0xffu8; 32];
         let fp = format_fingerprint(&hash);
         assert!(fp.starts_with("SHA256:"));
-        assert_eq!(fp.len(), 7 + 64); // "SHA256:" + 32 bytes * 2 hex chars
+        // 32 字节 → Base64 无填充: ceil(32 * 4 / 3) = 43 字符
+        assert_eq!(fp.len(), 7 + 43);
     }
 }

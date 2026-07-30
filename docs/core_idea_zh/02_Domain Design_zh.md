@@ -380,21 +380,21 @@ Storage 测试绝不应依赖：
 
 每个运行时对象有且仅有一个所有者。
 
-| 对象 | 所有者 |
-|---------|-------|
-| Session | Session 领域 |
-| Connection | Connection 领域 |
-| SSH Channel | Channel 领域 |
-| Terminal State | Terminal 领域 |
-| Remote Files | SFTP 领域 |
-| File Transfer | Transfer 领域 |
-| Saved Host | Host 领域 |
-| HostKey | HostKey 领域 |
-| Credential | Credential 领域 |
-| Configuration | Configuration 领域 |
-| History | History 领域 |
-| Events | Event 领域 |
-| Persistent Data | Storage 领域 |
+| 对象            | 所有者             |
+| --------------- | ------------------ |
+| Session         | Session 领域       |
+| Connection      | Connection 领域    |
+| SSH Channel     | Channel 领域       |
+| Terminal State  | Terminal 领域      |
+| Remote Files    | SFTP 领域          |
+| File Transfer   | Transfer 领域      |
+| Saved Host      | Host 领域          |
+| HostKey         | HostKey 领域       |
+| Credential      | Credential 领域    |
+| Configuration   | Configuration 领域 |
+| History         | History 领域       |
+| Events          | Event 领域         |
+| Persistent Data | Storage 领域       |
 
 所有权不得重叠。
 
