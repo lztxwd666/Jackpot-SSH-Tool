@@ -1,47 +1,35 @@
 <script setup lang="ts">
-import HelloWorld from './components/HelloWorld.vue'
-import TheWelcome from './components/TheWelcome.vue'
+import { ref, onMounted } from 'vue'
+import { listen } from '@tauri-apps/api/event'
+
+const status = ref('initializing...')
+const events = ref<string[]>([])
+
+onMounted(async () => {
+  status.value = 'running'
+  await listen<string>('core-event', (event) => {
+    const parsed = JSON.parse(event.payload)
+    events.value.unshift(`${new Date().toLocaleTimeString()}: ${parsed.type}`)
+  })
+})
 </script>
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="./assets/logo.svg" width="125" height="125" />
-
-    <div class="wrapper">
-      <HelloWorld msg="You did it!" />
+  <div class="container">
+    <h1>Jackpot SSH Tool</h1>
+    <p>Status: {{ status }}</p>
+    <div class="events">
+      <h3>Events</h3>
+      <ul>
+        <li v-for="(e, i) in events" :key="i">{{ e }}</li>
+      </ul>
     </div>
-  </header>
-
-  <main>
-    <TheWelcome />
-  </main>
+  </div>
 </template>
 
-<style scoped>
-header {
-  line-height: 1.5;
-}
-
-.logo {
-  display: block;
-  margin: 0 auto 2rem;
-}
-
-@media (min-width: 1024px) {
-  header {
-    display: flex;
-    place-items: center;
-    padding-right: calc(var(--section-gap) / 2);
-  }
-
-  .logo {
-    margin: 0 2rem 0 0;
-  }
-
-  header .wrapper {
-    display: flex;
-    place-items: flex-start;
-    flex-wrap: wrap;
-  }
-}
+<style>
+.container { padding: 2rem; font-family: monospace; }
+.events { margin-top: 1rem; }
+.events ul { list-style: none; padding: 0; }
+.events li { padding: 0.25rem 0; border-bottom: 1px solid #eee; }
 </style>
