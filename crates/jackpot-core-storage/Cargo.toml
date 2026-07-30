@@ -9,3 +9,6 @@ serde_json.workspace = true
 rusqlite.workspace = true
 tracing.workspace = true
 jackpot-core-common = { path = "../jackpot-core-common" }
+
+[dev-dependencies]
+uuid.workspace = true
