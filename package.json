@@ -1,0 +1,9 @@
+{
+  "name": "jackpot-ssh-tool",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd crates/jackpot-tauri && npm run dev",
+    "build": "cd crates/jackpot-tauri && npm run build"
+  }
+}
