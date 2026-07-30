@@ -2,13 +2,17 @@
 //! 提供跨 crate 共享的错误类型、ID 定义、配置抽象和日志初始化
 
 pub mod config;
+pub mod credential;
 pub mod error;
 pub mod id;
+pub mod knownhosts;
 pub mod ssh;
 
 pub use config::{Config, DefaultConfig};
+pub use credential::{ConfigCredentialProvider, CredentialProvider};
 pub use error::{CoreError, CoreResult};
 pub use id::{ChannelId, ConnectionId, HostId, SessionId, TransferId};
+pub use knownhosts::KnownHostsProvider;
 pub use ssh::{AuthMethod, ConnectionConfig, HostKeyInfo};
 
 /// 初始化全局 tracing 日志订阅器
