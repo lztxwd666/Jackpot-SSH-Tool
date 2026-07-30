@@ -227,6 +227,31 @@ impl Session {
         self.channels.blocking_read().clone()
     }
 
+    /// 发送 SSH keepalive 请求，检测连接是否存活
+    pub(crate) fn send_keepalive(&self) -> CoreResult<()> {
+        let guard = self.connection.lock().map_err(|e| {
+            core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
+        })?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
+        let session = conn.session().ok_or_else(|| {
+            core_common::CoreError::Internal("ssh session not available".into())
+        })?;
+
+        session
+            .keepalive_send()
+            .map_err(|e| core_common::CoreError::Internal(format!("keepalive failed: {e}")))?;
+
+        Ok(())
+    }
+
+    /// 设置 Session 状态（供 keepalive/reconnect 模块内部使用）
+    pub(crate) fn set_state(&self, new_state: SessionState) {
+        let mut state = self.state.blocking_write();
+        *state = new_state;
+    }
+
     /// 关闭所有通道并从通道列表中清除
     fn close_all_channels(&self) {
         let mut channels = self.channels.blocking_write();
