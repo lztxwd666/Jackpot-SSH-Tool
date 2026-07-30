@@ -36,12 +36,18 @@ impl Database {
         migrations::run_migrations(conn)
     }
 
-    pub fn connection(
-        &self,
-    ) -> CoreResult<std::sync::MutexGuard<'_, Option<rusqlite::Connection>>> {
-        self.conn
+    pub fn execute<F, T>(&self, f: F) -> CoreResult<T>
+    where
+        F: FnOnce(&rusqlite::Connection) -> CoreResult<T>,
+    {
+        let guard = self
+            .conn
             .lock()
-            .map_err(|e| jackpot_core_common::CoreError::Internal(e.to_string()))
+            .map_err(|e| jackpot_core_common::CoreError::Internal(e.to_string()))?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| jackpot_core_common::CoreError::Internal("database closed".into()))?;
+        f(conn)
     }
 
     pub fn close(self) -> CoreResult<()> {
@@ -73,14 +79,14 @@ mod tests {
         let db = Database::open(&dir).unwrap();
         db.migrate().unwrap();
 
-        let guard = db.connection().unwrap();
-        let conn = guard.as_ref().unwrap();
-        let version: i32 = conn
-            .query_row("SELECT version FROM _schema_version", [], |row| row.get(0))
+        let version: i32 = db
+            .execute(|conn| {
+                conn.query_row("SELECT version FROM _schema_version", [], |row| row.get(0))
+                    .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))
+            })
             .unwrap();
         assert_eq!(version, 1);
 
-        drop(guard);
         db.close().unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -91,13 +97,16 @@ mod tests {
         let db = Database::open(&dir).unwrap();
         db.migrate().unwrap();
 
-        let guard = db.connection().unwrap();
-        let conn = guard.as_ref().unwrap();
-        conn.execute("INSERT INTO hosts (id, name, address, port, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            ["test-id", "test-host", "192.168.1.1", "22", "2026-01-01", "2026-01-01"])
-            .unwrap();
+        db.execute(|conn| {
+            conn.execute(
+                "INSERT INTO hosts (id, name, address, port, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                ["test-id", "test-host", "192.168.1.1", "22", "2026-01-01", "2026-01-01"],
+            )
+            .map_err(|e| jackpot_core_common::CoreError::Storage(Box::new(e)))?;
+            Ok(())
+        })
+        .unwrap();
 
-        drop(guard);
         db.close().unwrap();
         std::fs::remove_dir_all(&dir).ok();
     }

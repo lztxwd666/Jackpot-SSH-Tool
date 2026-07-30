@@ -19,4 +19,4 @@ tracing.workspace = true
 jackpot-core-common = { path = "../jackpot-core-common" }
 jackpot-core-event = { path = "../jackpot-core-event" }
 jackpot-core-runtime = { path = "../jackpot-core-runtime" }
-jackpot-core-storage = { path = "../jackpot-core-storage" }
+

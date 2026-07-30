@@ -328,10 +328,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 
@@ -609,9 +607,9 @@ dependencies = [
 
 [[package]]
 name = "dlopen2_derive"
-version = "0.4.3"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fbbb781877580993a8707ec48672673ec7b81eeba04cfd2310bd28c08e47c8f"
+checksum = "95f4a04e1bfbfa4835a6073177aafb95ead4de0722dbb339195fdc7e0a09599b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1442,11 +1440,8 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 name = "jackpot-core-common"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "serde",
- "serde_json",
  "thiserror 2.0.19",
- "tracing",
  "tracing-subscriber",
  "uuid",
 ]
@@ -1469,11 +1464,8 @@ dependencies = [
  "jackpot-core-common",
  "jackpot-core-event",
  "jackpot-core-storage",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1495,7 +1487,6 @@ dependencies = [
  "jackpot-core-common",
  "jackpot-core-event",
  "jackpot-core-runtime",
- "jackpot-core-storage",
  "serde",
  "serde_json",
  "tauri",

@@ -34,6 +34,14 @@ impl CoreRuntime {
 
     pub async fn start(&self) -> CoreResult<()> {
         {
+            let running = self.running.read().await;
+            if *running {
+                return Err(jackpot_core_common::CoreError::Internal(
+                    "runtime already started".into(),
+                ));
+            }
+        }
+        {
             let mut running = self.running.write().await;
             *running = true;
         }
