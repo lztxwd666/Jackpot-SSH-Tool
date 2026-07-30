@@ -1,0 +1,66 @@
+//! SSH 连接相关的基础类型定义
+
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+/// SSH 连接配置，包含目标主机、端口、用户名和认证方式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: AuthMethod,
+    pub timeout_secs: u64,
+}
+
+impl ConnectionConfig {
+    /// 创建一个新的连接配置，默认端口 22、超时 30 秒
+    pub fn new(host: String, username: String, auth_method: AuthMethod) -> Self {
+        Self {
+            host,
+            port: 22,
+            username,
+            auth_method,
+            timeout_secs: 30,
+        }
+    }
+
+    /// 设置自定义端口
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = port;
+        self
+    }
+
+    /// 设置自定义超时
+    pub fn with_timeout(mut self, seconds: u64) -> Self {
+        self.timeout_secs = seconds;
+        self
+    }
+}
+
+/// SSH 认证方式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "method", content = "data")]
+pub enum AuthMethod {
+    /// 密码认证
+    Password(String),
+    /// 私钥文件认证，可选口令
+    PrivateKey { path: PathBuf, passphrase: Option<String> },
+    /// SSH Agent 认证（阶段 2a 暂不实现）
+    Agent,
+}
+
+/// 主机密钥信息，用于 known_hosts 验证
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostKeyInfo {
+    pub host: String,
+    pub port: u16,
+    pub key_type: String,
+    pub fingerprint: String,
+}
+
+impl HostKeyInfo {
+    pub fn new(host: String, port: u16, key_type: String, fingerprint: String) -> Self {
+        Self { host, port, key_type, fingerprint }
+    }
+}
