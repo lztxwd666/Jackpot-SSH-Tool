@@ -1,34 +1,33 @@
 # Jackpot SSH Tool
 
-Desktop SSH client built with Rust + Tauri v2 + Vue 3.
+基于 Rust + Tauri v2 + Vue 3 构建的桌面 SSH 客户端。
 
-## Features
+## 功能
 
-- **Host Management** — Save, search, and organize SSH hosts with groups and favorites
-- **SSH Terminal** — Interactive terminal via xterm.js with PTY resize support
-- **Keepalive** — Automatic keepalive to maintain persistent connections
-- **Reconnect** — Exponential backoff reconnection after disconnection
+- **主机管理** — 保存、搜索、分组管理 SSH 主机，支持收藏
+- **SSH 终端** — 基于 xterm.js 的交互式终端，支持 PTY 尺寸自适应
+- **心跳保活** — 自动发送 keepalive 维持长连接
+- **断线重连** — 指数退避策略的自动重连
 
-## Development
+## 开发
 
 ```bash
-# Prerequisites: Rust 1.95.0 (via rustup), Node.js >= 20
-PATH="$HOME/.cargo/bin:$PATH"
+# 环境要求: Rust 1.95.0 (通过 rustup 安装), Node.js >= 20
 
-# Build and test
+# 构建与测试
 cargo build
 cargo test
 cargo clippy --all-targets -- -D warnings
 
-# Frontend
+# 前端
 cd crates/desktop/ui && npm install
 cd crates/desktop/ui && npm run type-check
 
-# Launch (Windows)
+# 启动桌面应用
 npm run dev
 ```
 
-## Architecture
+## 架构
 
 ```
 desktop ──→ core-runtime ──→ core-event
@@ -38,8 +37,8 @@ desktop ──→ core-runtime ──→ core-event
                 └──→ core-storage
 ```
 
-See `CLAUDE.md` for detailed architecture and `docs/core_idea_en/` for full design specs.
+详见 `CLAUDE.md` 了解完整架构与开发规范。
 
-## License
+## 许可
 
 MIT

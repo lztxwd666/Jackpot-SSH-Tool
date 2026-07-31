@@ -2,6 +2,9 @@
 /target
 /target-wsl
 
+# Docs (plan/spec files, not for version control)
+/docs
+
 # Dependencies
 node_modules/
 
@@ -43,6 +46,3 @@ coverage/
 
 # TypeScript
 *.tsbuildinfo
-
-# Temporary dev artifacts
-docs/superpowers/
