@@ -8,11 +8,7 @@ Jackpot SSH Tool — desktop SSH client. Rust workspace (Tauri v2 + Vue 3). Curr
 
 ## Build, Test & Verification
 
-`rust-toolchain.toml` pins Rust to 1.95.0. System `rustc` (apt) is 1.75 — too old. Ensure rustup binaries are first in `PATH`:
-
-```bash
-PATH="$HOME/.cargo/bin:$PATH"
-```
+`rust-toolchain.toml` pins Rust to 1.95.0. Install via [rustup](https://rustup.rs/).
 
 ```bash
 # Workspace-wide
@@ -27,21 +23,16 @@ cargo test -p core-storage
 # Architecture invariant: core crates must NOT depend on Tauri
 cargo tree -p core-common --invert | grep tauri    # must be empty
 
-# Tauri dev server (starts Vue + Rust — Windows only; WSL needs GTK libs)
+# Tauri dev server (starts Vue dev server + Rust backend + desktop window)
 npm run dev
 
 # Frontend (inside crates/desktop/ui/ — NOT at repo root)
 cd crates/desktop/ui && npm install
 cd crates/desktop/ui && npm run build
 cd crates/desktop/ui && npm run type-check
-
-# Low memory: limit parallel rustc jobs
-CARGO_BUILD_JOBS=1 cargo build
 ```
 
-`.cargo/config.toml` redirects WSL builds to `target-wsl/` to avoid conflicts with Windows `target/`.
-
-Tests in `core-storage` create temp directories with real SQLite files. They clean up on success but may leave artifacts on failure in `$TMPDIR`.
+Tests in `core-storage` create temp directories with real SQLite files. They clean up on success but may leave artifacts on failure in `%TEMP%`.
 
 **Before reporting any implementation as complete, you MUST run all three** (`cargo build` + `cargo test` + `cargo clippy --all-targets -- -D warnings`). If any fails, fix before reporting. Never claim "done" without verified build + test + clippy.
 
