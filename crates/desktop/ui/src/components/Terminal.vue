@@ -44,17 +44,20 @@ onMounted(async () => {
   })
 
   term.onData((data) => {
-    invoke('terminal_send_input', { channelId: props.channelId, data })
+    invoke('terminal_send_input', { channelId: props.channelId, data }).catch(() => {})
   })
 
   term.onResize(({ cols, rows }) => {
-    invoke('terminal_resize', { channelId: props.channelId, cols, rows })
+    invoke('terminal_resize', { channelId: props.channelId, cols, rows }).catch(() => {})
   })
 
   const observer = new ResizeObserver(() => {
     fitAddon.fit()
   })
   observer.observe(terminalRef.value!)
+
+  // xterm 和事件监听器就绪后，通知后端开始读取 SSH 数据
+  await invoke('start_terminal', { channelId: props.channelId })
 })
 
 onBeforeUnmount(() => {

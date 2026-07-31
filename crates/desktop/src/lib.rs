@@ -13,6 +13,8 @@ use tauri::{Emitter, Manager};
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            core_common::init_logging("info");
+
             let config = Box::new(DefaultConfig::new(
                 app.path().app_data_dir()?,
                 "info".to_string(),
@@ -62,6 +64,7 @@ pub fn run() {
             commands::create_session,
             commands::connect_session,
             commands::open_shell,
+            commands::start_terminal,
             commands::terminal_send_input,
             commands::terminal_resize,
             commands::terminal_close,

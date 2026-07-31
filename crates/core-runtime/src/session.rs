@@ -53,6 +53,7 @@ impl Session {
 
     /// 使用指定的配置和已知主机信息建立 SSH 连接
     /// 连接成功则状态转为 Connected，失败保持 Connecting 状态
+    /// 重连场景下先清理旧连接和通道
     pub fn connect(
         &self,
         config: ConnectionConfig,
@@ -65,6 +66,15 @@ impl Session {
                     "session is closed, cannot connect".into(),
                 ));
             }
+        }
+
+        // 清理旧连接和通道（重连场景）
+        self.close_all_channels();
+        {
+            let mut guard = self.connection.lock().map_err(|e| {
+                core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
+            })?;
+            *guard = None;
         }
 
         {

@@ -61,6 +61,10 @@ impl SshConnection {
         tcp.set_read_timeout(Some(timeout)).map_err(|e| {
             core_common::CoreError::Internal(format!("set read timeout failed: {e}"))
         })?;
+        // 禁用 Nagle 算法，确保键盘输入小包立即发送
+        tcp.set_nodelay(true).map_err(|e| {
+            core_common::CoreError::Internal(format!("set nodelay failed: {e}"))
+        })?;
 
         self.dispatcher
             .dispatch(CoreEvent::Connection(ConnectionEvent::TcpConnected));

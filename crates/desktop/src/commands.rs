@@ -153,10 +153,30 @@ pub async fn open_shell(
         channels.insert(channel_id, channel.clone());
     }
 
-    // 启动后台读取循环
-    channel.start_read_loop();
+    // 不在此启动读循环——等前端 Terminal 组件挂载后通过 start_terminal 命令触发
+    // channel.start_read_loop(); // 延迟到 start_terminal 命令
 
     Ok(channel_id.to_string())
+}
+
+/// 前端 Terminal 组件挂载完成后调用，启动数据读取
+/// 这确保了事件监听器就绪后才开始读 SSH 数据
+#[tauri::command]
+pub async fn start_terminal(
+    state: State<'_, Arc<AppState>>,
+    channel_id: String,
+) -> Result<(), String> {
+    let parsed_id = uuid::Uuid::from_str(&channel_id).map_err(|e| e.to_string())?;
+    let cid: ChannelId = serde_json::from_str(&serde_json::to_string(&parsed_id).unwrap())
+        .map_err(|e| e.to_string())?;
+
+    let channels = state.channels.read().await;
+    let channel = channels.get(&cid).ok_or("channel not found")?.clone();
+    drop(channels);
+
+    channel.start_read_loop();
+    tracing::info!(%cid, "terminal read loop started");
+    Ok(())
 }
 
 /// 向指定 Channel 发送终端输入

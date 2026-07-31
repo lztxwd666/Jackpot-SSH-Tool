@@ -117,9 +117,16 @@ async function deleteHost(host: Host) {
   try {
     await invoke('delete_host', { id: host.id })
     if (selectedHost.value?.id === host.id) {
+      // 清理活跃 session
+      if (sessionId.value) {
+        try { await invoke('terminal_close', { sessionId: sessionId.value }) } catch (_) {}
+      }
       editing.value = false
       selectedHost.value = null
       connecting.value = false
+      connected.value = false
+      channelId.value = ''
+      sessionId.value = ''
     }
     await loadHosts()
   } catch (e) {
@@ -156,10 +163,11 @@ async function doConnect() {
     try {
       await invoke('terminal_close', { sessionId: sessionId.value })
     } catch (_) {}
-    connected.value = false
-    channelId.value = ''
-    sessionId.value = ''
   }
+  // 总清空状态，即使上面失败
+  connected.value = false
+  channelId.value = ''
+  sessionId.value = ''
 
   connecting.value = true
   showPasswordPrompt.value = false
