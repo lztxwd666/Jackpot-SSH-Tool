@@ -2,12 +2,11 @@
 //! 封装 ssh2::Channel 和 ssh2::Sftp，提供统一的读写和生命周期管理接口
 //! 所有阻塞 I/O 操作在 spawn_blocking 中执行
 
-use core_common::{ChannelId, ChannelState, ChannelType, CoreResult, SessionId};
+use core_common::{ChannelId, ChannelState, ChannelType, CoreResult, PtySize, SessionId};
 use core_event::event::{ChannelEvent, CoreEvent};
 use core_event::EventDispatcher;
 use std::io::{Read, Write};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 /// 内部通道类型，统一包装 ssh2::Channel 和 ssh2::Sftp
 pub enum ChannelInner {
@@ -44,6 +43,16 @@ impl Channel {
             .channel_session()
             .map_err(|e| core_common::CoreError::Internal(format!("open channel session failed: {e}")))?;
 
+        let pty = PtySize::default();
+        inner_ch
+            .request_pty_size(
+                pty.cols,
+                pty.rows,
+                Some(pty.width_px),
+                Some(pty.height_px),
+            )
+            .map_err(|e| core_common::CoreError::Internal(format!("request pty failed: {e}")))?;
+
         inner_ch
             .shell()
             .map_err(|e| core_common::CoreError::Internal(format!("start shell failed: {e}")))?;
@@ -56,7 +65,7 @@ impl Channel {
         }
 
         {
-            let mut state = channel.state.blocking_write();
+            let mut state = channel.state.write().unwrap();
             *state = ChannelState::Open;
         }
 
@@ -94,7 +103,7 @@ impl Channel {
         }
 
         {
-            let mut state = channel.state.blocking_write();
+            let mut state = channel.state.write().unwrap();
             *state = ChannelState::Open;
         }
 
@@ -190,14 +199,14 @@ impl Channel {
 
     pub fn close(&self) -> CoreResult<()> {
         {
-            let state = self.state.blocking_read();
+            let state = self.state.read().unwrap();
             if *state == ChannelState::Closed {
                 return Ok(());
             }
         }
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = self.state.write().unwrap();
             *state = ChannelState::Closing;
         }
 
@@ -216,7 +225,7 @@ impl Channel {
         }
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = self.state.write().unwrap();
             *state = ChannelState::Closed;
         }
 
@@ -229,12 +238,43 @@ impl Channel {
         Ok(())
     }
 
+    pub fn resize_pty(&self, cols: u32, rows: u32) -> CoreResult<()> {
+        let inner = self.inner.clone();
+        tokio::task::block_in_place(|| {
+            let mut guard = inner.lock().map_err(|e| {
+                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
+            })?;
+            if let Some(ChannelInner::Session(ref mut ch)) = *guard {
+                ch.request_pty_size(cols, rows, Some(cols * 8), Some(rows * 16))
+                    .map_err(|e| core_common::CoreError::Internal(format!("resize pty failed: {e}")))?;
+            }
+            Ok(())
+        })
+    }
+
+    /// 启动后台读取循环：持续从 Shell Channel 读取数据并发送 DataReceived 事件
+    /// 返回 JoinHandle，调用方可 await 来取消
+    pub fn start_read_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let channel = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if !channel.is_open() {
+                    break;
+                }
+                match channel.read(4096).await {
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+        })
+    }
+
     pub fn state(&self) -> ChannelState {
-        *self.state.blocking_read()
+        *self.state.read().unwrap()
     }
 
     pub fn is_open(&self) -> bool {
-        *self.state.blocking_read() == ChannelState::Open
+        *self.state.read().unwrap() == ChannelState::Open
     }
 
     fn create(

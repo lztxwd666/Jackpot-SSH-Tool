@@ -106,6 +106,21 @@ pub enum ChannelState {
     Closed,
 }
 
+/// PTY 终端窗口尺寸
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct PtySize {
+    pub cols: u32,
+    pub rows: u32,
+    pub width_px: u32,
+    pub height_px: u32,
+}
+
+impl Default for PtySize {
+    fn default() -> Self {
+        Self { cols: 80, rows: 24, width_px: 0, height_px: 0 }
+    }
+}
+
 /// 重连策略配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconnectPolicy {

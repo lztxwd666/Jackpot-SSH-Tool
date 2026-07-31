@@ -1,0 +1,4 @@
+[build]
+# WSL 与 Windows 共享文件系统但 target/ 产物不兼容
+# WSL 使用独立 target 目录避免污染 Windows 构建
+target-dir = "target-wsl"

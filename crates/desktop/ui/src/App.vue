@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import Terminal from './components/Terminal.vue'
 
 interface Host {
   id: string
@@ -33,6 +34,13 @@ const form = ref({
   favorite: false,
   notes: '',
 })
+
+const connecting = ref(false)
+const connected = ref(false)
+const channelId = ref('')
+const sessionId = ref('')
+const password = ref('')
+const showPasswordPrompt = ref(false)
 
 async function loadHosts() {
   try {
@@ -111,6 +119,7 @@ async function deleteHost(host: Host) {
     if (selectedHost.value?.id === host.id) {
       editing.value = false
       selectedHost.value = null
+      connecting.value = false
     }
     await loadHosts()
   } catch (e) {
@@ -121,6 +130,78 @@ async function deleteHost(host: Host) {
 function cancelEdit() {
   editing.value = false
   selectedHost.value = null
+}
+
+function selectHost(host: Host) {
+  selectedHost.value = host
+  editing.value = false
+  connected.value = false
+  connecting.value = false
+  channelId.value = ''
+}
+
+function promptConnect() {
+  if (!selectedHost.value) return
+  if (selectedHost.value.auth_type === 'password') {
+    showPasswordPrompt.value = true
+    password.value = ''
+  }
+}
+
+async function doConnect() {
+  if (!selectedHost.value) return
+
+  // 先断开旧连接
+  if (sessionId.value) {
+    try {
+      await invoke('terminal_close', { sessionId: sessionId.value })
+    } catch (_) {}
+    connected.value = false
+    channelId.value = ''
+    sessionId.value = ''
+  }
+
+  connecting.value = true
+  showPasswordPrompt.value = false
+
+  try {
+    const sid = await invoke('create_session') as string
+    sessionId.value = sid
+
+    await invoke('connect_session', {
+      sessionId: sid,
+      host: selectedHost.value.address,
+      port: selectedHost.value.port,
+      username: selectedHost.value.username,
+      password: password.value,
+    })
+
+    const cid = await invoke('open_shell', { sessionId: sid }) as string
+    channelId.value = cid
+    connected.value = true
+  } catch (e) {
+    console.error('Connect failed:', e)
+    alert(`Connection failed: ${e}`)
+  } finally {
+    connecting.value = false
+  }
+}
+
+function cancelConnect() {
+  showPasswordPrompt.value = false
+  password.value = ''
+  connecting.value = false
+}
+
+async function disconnect() {
+  if (sessionId.value) {
+    try {
+      await invoke('terminal_close', { sessionId: sessionId.value })
+    } catch (_) {}
+  }
+  connected.value = false
+  channelId.value = ''
+  sessionId.value = ''
 }
 
 onMounted(async () => {
@@ -137,7 +218,6 @@ onMounted(async () => {
 
 <template>
   <div class="app-layout">
-    <!-- 侧边栏：主机列表 -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <h2>Hosts</h2>
@@ -156,7 +236,7 @@ onMounted(async () => {
           v-for="host in hosts"
           :key="host.id"
           :class="{ active: selectedHost?.id === host.id }"
-          @click="editHost(host)"
+          @click="selectHost(host)"
         >
           <span class="host-name">{{ host.name }}</span>
           <span class="host-addr">{{ host.address }}:{{ host.port }}</span>
@@ -167,9 +247,19 @@ onMounted(async () => {
       </div>
     </aside>
 
-    <!-- 主面板 -->
     <main class="main-panel">
-      <template v-if="editing">
+      <template v-if="connected && channelId">
+        <div class="terminal-wrapper">
+          <div class="terminal-header">
+            <span class="connection-info">
+              {{ selectedHost?.name }} ({{ selectedHost?.username }}@{{ selectedHost?.address }}:{{ selectedHost?.port }})
+            </span>
+            <button class="btn btn-danger" @click="disconnect">Disconnect</button>
+          </div>
+          <Terminal :channelId="channelId" :key="channelId" />
+        </div>
+      </template>
+      <template v-else-if="editing">
         <div class="form-header">
           <h3>{{ selectedHost ? 'Edit Host' : 'New Host' }}</h3>
         </div>
@@ -224,11 +314,68 @@ onMounted(async () => {
           </div>
         </form>
       </template>
+      <template v-else-if="selectedHost">
+        <div class="host-detail">
+          <div class="host-detail-header">
+            <h3>{{ selectedHost.name }}</h3>
+            <div class="host-detail-actions">
+              <button class="btn btn-primary" @click="promptConnect" :disabled="connecting">
+                {{ connecting ? 'Connecting...' : 'Connect' }}
+              </button>
+              <button class="btn" @click="editHost(selectedHost!)">Edit</button>
+            </div>
+          </div>
+          <div class="host-detail-info">
+            <div class="info-row">
+              <span class="info-label">Address</span>
+              <span class="info-value">{{ selectedHost.address }}:{{ selectedHost.port }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Username</span>
+              <span class="info-value">{{ selectedHost.username }}</span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">Auth</span>
+              <span class="info-value">{{ selectedHost.auth_type }}</span>
+            </div>
+            <div class="info-row" v-if="selectedHost.group_name">
+              <span class="info-label">Group</span>
+              <span class="info-value">{{ selectedHost.group_name }}</span>
+            </div>
+            <div class="info-row" v-if="selectedHost.notes">
+              <span class="info-label">Notes</span>
+              <span class="info-value">{{ selectedHost.notes }}</span>
+            </div>
+          </div>
+        </div>
+      </template>
       <template v-else>
         <div class="placeholder">
           <p>Select a host from the list or add a new one.</p>
         </div>
       </template>
+
+      <div v-if="showPasswordPrompt" class="modal-overlay" @click.self="cancelConnect">
+        <div class="modal">
+          <h3>Enter Password</h3>
+          <p>Connecting to {{ selectedHost?.username }}@{{ selectedHost?.address }}</p>
+          <form @submit.prevent="doConnect">
+            <input
+              v-model="password"
+              type="password"
+              placeholder="Password"
+              autofocus
+              required
+            />
+            <div class="modal-actions">
+              <button type="submit" class="btn btn-primary" :disabled="connecting">
+                {{ connecting ? 'Connecting...' : 'Connect' }}
+              </button>
+              <button type="button" class="btn" @click="cancelConnect">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </main>
   </div>
 </template>
@@ -241,7 +388,6 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-/* 侧边栏 */
 .sidebar {
   width: 280px;
   min-width: 280px;
@@ -325,11 +471,11 @@ onMounted(async () => {
   color: hsla(160, 100%, 37%, 1);
 }
 
-/* 主面板 */
 .main-panel {
   flex: 1;
-  padding: 2rem;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .form-header h3 {
@@ -342,6 +488,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  padding: 2rem;
 }
 
 .host-form label {
@@ -380,7 +527,6 @@ onMounted(async () => {
   margin-top: 0.5rem;
 }
 
-/* 按钮 */
 .btn {
   padding: 0.4rem 0.8rem;
   border: 1px solid var(--color-border);
@@ -394,6 +540,11 @@ onMounted(async () => {
 
 .btn:hover {
   background: var(--color-background-mute);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .btn-primary {
@@ -423,5 +574,127 @@ onMounted(async () => {
   height: 100%;
   color: var(--color-text);
   opacity: 0.5;
+}
+
+.host-detail {
+  padding: 2rem;
+}
+
+.host-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.host-detail-header h3 {
+  color: var(--color-heading);
+  font-size: 1.3rem;
+}
+
+.host-detail-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.host-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.info-row {
+  display: flex;
+  gap: 1rem;
+  align-items: baseline;
+}
+
+.info-label {
+  font-size: 0.8rem;
+  color: var(--color-text);
+  opacity: 0.6;
+  min-width: 80px;
+}
+
+.info-value {
+  font-size: 0.9rem;
+  color: var(--color-text);
+}
+
+.terminal-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.terminal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: var(--color-background-soft);
+  border-bottom: 1px solid var(--color-border);
+  position: relative;
+  z-index: 10;
+  flex-shrink: 0;
+}
+
+.connection-info {
+  font-size: 0.85rem;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  min-width: 320px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+
+.modal h3 {
+  color: var(--color-heading);
+  margin-bottom: 0.5rem;
+}
+
+.modal p {
+  color: var(--color-text);
+  opacity: 0.7;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.modal input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-background-soft);
+  color: var(--color-text);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  box-sizing: border-box;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 </style>

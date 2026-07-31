@@ -1,3 +1,48 @@
+# Rust build
 /target
-/docs
-TESTING.md
+/target-wsl
+
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+dist-ssr/
+
+# Tauri auto-generated
+crates/desktop/gen/
+
+# IDE / Editor
+**/.vscode/*
+!**/.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Test / coverage
+coverage/
+/cypress/videos/
+/cypress/screenshots/
+
+# Env
+*.local
+
+# TypeScript
+*.tsbuildinfo
+
+# Temporary dev artifacts
+docs/superpowers/

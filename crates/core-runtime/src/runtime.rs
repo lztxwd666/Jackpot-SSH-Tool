@@ -4,14 +4,16 @@
 use core_common::config::Config;
 use core_common::host::HostRepository;
 use core_common::knownhosts::KnownHostsProvider;
-use core_common::CoreResult;
+use core_common::{CoreResult, SessionId};
 use core_event::event::{ApplicationEvent, CoreEvent};
 use core_event::{ChannelDispatcher, EventDispatcher};
 use core_storage::Database;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::connection_service::{ConnectionService, SshConnectionService};
+use crate::Session;
 
 /// 运行时核心结构
 /// 持有配置、事件分发器、数据库连接、连接服务和 KnownHosts Provider
@@ -23,6 +25,7 @@ pub struct CoreRuntime {
     connection_service: RwLock<Option<Arc<dyn ConnectionService>>>,
     known_hosts: RwLock<Option<Arc<dyn KnownHostsProvider>>>,
     host_repo: RwLock<Option<Arc<dyn HostRepository>>>,
+    sessions: RwLock<HashMap<SessionId, Arc<Session>>>,
 }
 
 impl CoreRuntime {
@@ -37,6 +40,7 @@ impl CoreRuntime {
             connection_service: RwLock::new(None),
             known_hosts: RwLock::new(None),
             host_repo: RwLock::new(None),
+            sessions: RwLock::new(HashMap::new()),
         }
     }
 
@@ -118,6 +122,29 @@ impl CoreRuntime {
     /// 获取 HostRepository 的引用（仅在 start() 后有效）
     pub async fn host_repo(&self) -> Option<Arc<dyn HostRepository>> {
         self.host_repo.read().await.clone()
+    }
+
+    /// 创建一个新的 Session 并注册到会话管理器中
+    pub async fn create_session(&self) -> CoreResult<Arc<Session>> {
+        let session = Session::new(self.dispatcher.clone());
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(session.id, session.clone());
+        }
+        tracing::info!(session_id = %session.id, "session created and registered");
+        Ok(session)
+    }
+
+    /// 根据 ID 获取已注册的 Session
+    pub async fn get_session(&self, id: &SessionId) -> Option<Arc<Session>> {
+        self.sessions.read().await.get(id).cloned()
+    }
+
+    /// 从会话管理器中移除指定 Session
+    pub async fn remove_session(&self, id: &SessionId) {
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(id);
+        tracing::info!(session_id = %id, "session removed");
     }
 
     /// 优雅关闭运行时：断开连接、销毁 Provider、关闭数据库

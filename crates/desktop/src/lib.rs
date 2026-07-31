@@ -5,6 +5,7 @@ mod commands;
 
 use commands::AppState;
 use core_common::DefaultConfig;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
@@ -23,6 +24,7 @@ pub fn run() {
 
             let state = Arc::new(AppState {
                 runtime: tokio::sync::RwLock::new(Some(runtime)),
+                channels: tokio::sync::RwLock::new(HashMap::new()),
             });
             app.manage(state.clone());
 
@@ -57,6 +59,12 @@ pub fn run() {
             commands::save_host,
             commands::delete_host,
             commands::search_hosts,
+            commands::create_session,
+            commands::connect_session,
+            commands::open_shell,
+            commands::terminal_send_input,
+            commands::terminal_resize,
+            commands::terminal_close,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri application");
