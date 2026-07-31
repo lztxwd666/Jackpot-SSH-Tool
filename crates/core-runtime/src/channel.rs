@@ -16,19 +16,17 @@ pub enum ChannelInner {
 }
 
 /// SSH 数据通道，封装单个 ssh2 Channel 或 Sftp 实例
-/// 通过 RwLock 管理生命周期状态，所有 I/O 使用 spawn_blocking
+/// 使用 Arc<Mutex<Option<>>> 确保并发读写安全：spawn_blocking 中持有锁
 pub struct Channel {
     pub id: ChannelId,
     pub channel_type: ChannelType,
     pub session_id: SessionId,
     state: RwLock<ChannelState>,
-    inner: std::sync::Mutex<Option<ChannelInner>>,
+    inner: Arc<std::sync::Mutex<Option<ChannelInner>>>,
     dispatcher: Arc<dyn EventDispatcher>,
 }
 
 impl Channel {
-    /// 创建一个 Shell 类型的 Channel
-    /// 从给定的 ssh2::Session 打开 channel_session 并启动 shell
     pub fn open_shell(
         session_id: SessionId,
         ssh_session: &ssh2::Session,
@@ -39,7 +37,7 @@ impl Channel {
         channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
             session_id: channel.session_id,
             channel_id: channel.id,
-            channel_type: channel.channel_type.clone(),
+            channel_type: channel.channel_type,
         }));
 
         let mut inner_ch = ssh_session
@@ -71,7 +69,6 @@ impl Channel {
         Ok(channel)
     }
 
-    /// 创建一个 SFTP 类型的 Channel
     pub fn open_sftp(
         session_id: SessionId,
         ssh_session: &ssh2::Session,
@@ -82,7 +79,7 @@ impl Channel {
         channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
             session_id: channel.session_id,
             channel_id: channel.id,
-            channel_type: channel.channel_type.clone(),
+            channel_type: channel.channel_type,
         }));
 
         let sftp = ssh_session
@@ -110,53 +107,44 @@ impl Channel {
         Ok(channel)
     }
 
-    /// 从 Channel 读取数据（仅 Shell/Exec 类型有效）
-    /// 在 spawn_blocking 中执行阻塞读取，读取完成后发送 DataReceived 事件
     pub async fn read(&self, len: usize) -> CoreResult<Vec<u8>> {
-        if matches!(*self.state.blocking_read(), ChannelState::Closed | ChannelState::Closing) {
+        if !self.is_open() {
             return Err(core_common::CoreError::Internal("channel is closed".into()));
         }
 
-        let inner = {
-            let mut guard = self.inner.lock().map_err(|e| {
-                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
-            })?;
-            guard
-                .take()
-                .ok_or_else(|| core_common::CoreError::Internal("channel not open".into()))?
-        };
-
+        let inner = self.inner.clone();
         let channel_id = self.id;
         let session_id = self.session_id;
         let dispatcher = self.dispatcher.clone();
 
-        let (inner, result) = tokio::task::spawn_blocking(move || {
-            let mut inner = inner;
-            let mut buf = vec![0u8; len];
-            let result = match &mut inner {
-                ChannelInner::Session(ref mut ch) => ch
-                    .read(&mut buf)
-                    .map_err(|e| core_common::CoreError::Internal(format!("channel read failed: {e}"))),
+        let data = tokio::task::spawn_blocking(move || {
+            let mut guard = inner.lock().map_err(|e| {
+                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
+            })?;
+            let mut ch_inner = guard.take().ok_or_else(|| {
+                core_common::CoreError::Internal("channel not open".into())
+            })?;
+
+            let result = match &mut ch_inner {
+                ChannelInner::Session(ref mut ch) => {
+                    let mut buf = vec![0u8; len];
+                    ch.read(&mut buf).map(|n| {
+                        buf.truncate(n);
+                        buf
+                    }).map_err(|e| {
+                        core_common::CoreError::Internal(format!("channel read failed: {e}"))
+                    })
+                }
                 ChannelInner::Sftp(_) => Err(core_common::CoreError::Internal(
                     "read not supported on sftp channel".into(),
                 )),
             };
-            (inner, result.map(|n| {
-                buf.truncate(n);
-                buf
-            }))
+
+            *guard = Some(ch_inner);
+            result
         })
         .await
-        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))?;
-
-        let data = result?;
-
-        {
-            let mut guard = self.inner.lock().map_err(|e| {
-                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
-            })?;
-            *guard = Some(inner);
-        }
+        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))??;
 
         dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
             session_id,
@@ -167,50 +155,39 @@ impl Channel {
         Ok(data)
     }
 
-    /// 向 Channel 写入数据（仅 Shell/Exec 类型有效）
-    /// 在 spawn_blocking 中执行阻塞写入
     pub async fn write(&self, data: Vec<u8>) -> CoreResult<usize> {
-        if matches!(*self.state.blocking_read(), ChannelState::Closed | ChannelState::Closing) {
+        if !self.is_open() {
             return Err(core_common::CoreError::Internal("channel is closed".into()));
         }
 
-        let inner = {
-            let mut guard = self.inner.lock().map_err(|e| {
+        let inner = self.inner.clone();
+
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inner.lock().map_err(|e| {
                 core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
             })?;
-            guard
-                .take()
-                .ok_or_else(|| core_common::CoreError::Internal("channel not open".into()))?
-        };
+            let mut ch_inner = guard.take().ok_or_else(|| {
+                core_common::CoreError::Internal("channel not open".into())
+            })?;
 
-        let (inner, result) = tokio::task::spawn_blocking(move || {
-            let mut inner = inner;
-            let result = match &mut inner {
-                ChannelInner::Session(ref mut ch) => ch
-                    .write(&data)
-                    .map_err(|e| core_common::CoreError::Internal(format!("channel write failed: {e}"))),
+            let result = match &mut ch_inner {
+                ChannelInner::Session(ref mut ch) => {
+                    ch.write(&data).map_err(|e| {
+                        core_common::CoreError::Internal(format!("channel write failed: {e}"))
+                    })
+                }
                 ChannelInner::Sftp(_) => Err(core_common::CoreError::Internal(
                     "write not supported on sftp channel".into(),
                 )),
             };
-            (inner, result)
+
+            *guard = Some(ch_inner);
+            result
         })
         .await
-        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))?;
-
-        let n = result?;
-
-        {
-            let mut guard = self.inner.lock().map_err(|e| {
-                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
-            })?;
-            *guard = Some(inner);
-        }
-
-        Ok(n)
+        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))?
     }
 
-    /// 关闭 Channel，释放底层 ssh2 资源
     pub fn close(&self) -> CoreResult<()> {
         {
             let state = self.state.blocking_read();
@@ -234,9 +211,7 @@ impl Channel {
                     let _ = ch.close();
                     let _ = ch.wait_close();
                 }
-                ChannelInner::Sftp(_sftp) => {
-                    // ssh2::Sftp 在 drop 时自动关闭底层 channel
-                }
+                ChannelInner::Sftp(_sftp) => {}
             }
         }
 
@@ -254,17 +229,14 @@ impl Channel {
         Ok(())
     }
 
-    /// 获取当前 Channel 状态
     pub fn state(&self) -> ChannelState {
-        self.state.blocking_read().clone()
+        *self.state.blocking_read()
     }
 
-    /// 检查 Channel 是否打开
     pub fn is_open(&self) -> bool {
         *self.state.blocking_read() == ChannelState::Open
     }
 
-    /// 创建一个处于 Opening 状态的新 Channel
     fn create(
         session_id: SessionId,
         channel_type: ChannelType,
@@ -275,7 +247,7 @@ impl Channel {
             channel_type,
             session_id,
             state: RwLock::new(ChannelState::Opening),
-            inner: std::sync::Mutex::new(None),
+            inner: Arc::new(std::sync::Mutex::new(None)),
             dispatcher,
         }))
     }

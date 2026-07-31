@@ -8,8 +8,6 @@ use core_common::DefaultConfig;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 
-/// Tauri 应用启动入口
-/// setup 阶段创建 CoreRuntime 并启动事件转发循环
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -26,20 +24,40 @@ pub fn run() {
             let state = Arc::new(AppState {
                 runtime: tokio::sync::RwLock::new(Some(runtime)),
             });
-            app.manage(state);
+            app.manage(state.clone());
 
             let app_handle = app.handle().clone();
-            // 事件转发循环：CoreRuntime 产生的事件通过 tauri.emit 推送到前端
             tauri::async_runtime::spawn(async move {
+                // 启动 CoreRuntime（初始化数据库、迁移、Provider）
+                if let Some(ref rt) = *state.runtime.read().await {
+                    if let Err(e) = rt.start().await {
+                        tracing::error!(%e, "failed to start core runtime");
+                        return;
+                    }
+                }
+
+                // 事件转发循环：CoreRuntime → Tauri IPC → Vue 前端
                 while let Ok(event) = event_rx.recv().await {
-                    let payload = serde_json::to_string(&event).unwrap_or_default();
-                    let _ = app_handle.emit("core-event", payload);
+                    let payload = serde_json::to_string(&event).unwrap_or_else(|e| {
+                        tracing::error!(%e, "failed to serialize event");
+                        "{}".into()
+                    });
+                    if let Err(e) = app_handle.emit("core-event", payload) {
+                        tracing::error!(%e, "failed to emit core-event");
+                    }
                 }
             });
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::get_app_status, commands::ping])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_app_status,
+            commands::ping,
+            commands::list_hosts,
+            commands::save_host,
+            commands::delete_host,
+            commands::search_hosts,
+        ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("failed to run tauri application");
 }

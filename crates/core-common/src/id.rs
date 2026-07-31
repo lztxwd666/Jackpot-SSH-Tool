@@ -10,7 +10,7 @@ macro_rules! define_id {
     ($name:ident) => {
         #[derive(Copy, Clone, Debug, Hash, Eq, PartialEq, Serialize, Deserialize)]
         #[serde(transparent)]
-        pub struct $name(pub Uuid);
+        pub struct $name(Uuid);
 
         impl $name {
             pub fn new() -> Self {

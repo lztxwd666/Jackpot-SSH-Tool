@@ -41,52 +41,64 @@ impl SshConnection {
     pub fn connect(&mut self) -> CoreResult<()> {
         let addr = format!("{}:{}", self.config.host, self.config.port);
 
-        self.dispatcher.dispatch(CoreEvent::Connection(
-            ConnectionEvent::Connecting {
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::Connecting {
                 host: self.config.host.clone(),
                 port: self.config.port,
-            },
-        ));
+            }));
 
         // TCP 连接
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let tcp = TcpStream::connect_timeout(
-            &addr.parse().map_err(|e| core_common::CoreError::Internal(format!("invalid address {addr}: {e}")))?,
+            &addr.parse().map_err(|e| {
+                core_common::CoreError::Internal(format!("invalid address {addr}: {e}"))
+            })?,
             timeout,
         )
-        .map_err(|e| core_common::CoreError::Internal(format!("TCP connect to {addr} failed: {e}")))?;
-        tcp.set_read_timeout(Some(timeout))
-           .map_err(|e| core_common::CoreError::Internal(format!("set read timeout failed: {e}")))?;
+        .map_err(|e| {
+            core_common::CoreError::Internal(format!("TCP connect to {addr} failed: {e}"))
+        })?;
+        tcp.set_read_timeout(Some(timeout)).map_err(|e| {
+            core_common::CoreError::Internal(format!("set read timeout failed: {e}"))
+        })?;
 
-        self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::TcpConnected));
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::TcpConnected));
 
         // SSH 握手
-        let mut session = Session::new()
-            .map_err(|e| core_common::CoreError::Internal(format!("create SSH session failed: {e}")))?;
+        let mut session = Session::new().map_err(|e| {
+            core_common::CoreError::Internal(format!("create SSH session failed: {e}"))
+        })?;
         session.set_tcp_stream(tcp);
 
-        self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::HandshakeStarted));
-        session.handshake()
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::HandshakeStarted));
+        session
+            .handshake()
             .map_err(|e| core_common::CoreError::Internal(format!("SSH handshake failed: {e}")))?;
 
         // HostKey 验证
-        self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::HostKeyVerifying));
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::HostKeyVerifying));
 
         let host_key_info = check_host_key(&session, &self.config.host, self.config.port)?;
 
         if let Some(ref known_hosts) = self.known_hosts {
             match known_hosts.find_host_key(&self.config.host, self.config.port)? {
                 None => {
-                    self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Unknown {
-                        host: self.config.host.clone(),
-                        fingerprint: host_key_info.fingerprint.clone(),
-                    }));
+                    self.dispatcher
+                        .dispatch(CoreEvent::HostKey(HostKeyEvent::Unknown {
+                            host: self.config.host.clone(),
+                            fingerprint: host_key_info.fingerprint.clone(),
+                        }));
                 }
                 Some(stored) => {
                     if stored.fingerprint == host_key_info.fingerprint {
-                        self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Accepted));
+                        self.dispatcher
+                            .dispatch(CoreEvent::HostKey(HostKeyEvent::Accepted));
                     } else {
-                        self.dispatcher.dispatch(CoreEvent::HostKey(HostKeyEvent::Rejected));
+                        self.dispatcher
+                            .dispatch(CoreEvent::HostKey(HostKeyEvent::Rejected));
                         return Err(core_common::CoreError::Internal(format!(
                             "host key verification failed for {}: fingerprint mismatch",
                             self.config.host
@@ -98,10 +110,12 @@ impl SshConnection {
 
         // 认证
         authenticate(&session, &self.config.username, &self.config.auth_method)?;
-        self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::Authenticated));
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::Authenticated));
 
         self.session = Some(session);
-        self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::Ready));
+        self.dispatcher
+            .dispatch(CoreEvent::Connection(ConnectionEvent::Ready));
 
         tracing::info!(host = %self.config.host, port = self.config.port, "SSH connection established");
         Ok(())
@@ -111,7 +125,8 @@ impl SshConnection {
     pub fn disconnect(&mut self) -> CoreResult<()> {
         if let Some(session) = self.session.take() {
             drop(session);
-            self.dispatcher.dispatch(CoreEvent::Connection(ConnectionEvent::Disconnected));
+            self.dispatcher
+                .dispatch(CoreEvent::Connection(ConnectionEvent::Disconnected));
             tracing::info!(host = %self.config.host, "SSH connection closed");
         }
         Ok(())
@@ -119,7 +134,10 @@ impl SshConnection {
 
     /// 检查连接是否活跃
     pub fn is_connected(&self) -> bool {
-        self.session.as_ref().map(|s| s.authenticated()).unwrap_or(false)
+        self.session
+            .as_ref()
+            .map(|s| s.authenticated())
+            .unwrap_or(false)
     }
 
     /// 获取内部 session 的引用（仅在连接建立后有效）

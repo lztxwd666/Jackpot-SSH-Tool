@@ -2,7 +2,7 @@
 
 ## Project
 
-Jackpot SSH Tool — desktop SSH client. Rust core + Tauri v2 + Vue 3 frontend. Currently Phase 1 (Foundation): skeleton with event framework, no SSH code yet.
+Jackpot SSH Tool — desktop SSH client. Rust core + Tauri v2 + Vue 3 frontend. Currently Phase 2 (SSH Core): connection, session, channel, keepalive, and reconnection implemented. Terminal UI not yet available.
 
 ## Architecture
 

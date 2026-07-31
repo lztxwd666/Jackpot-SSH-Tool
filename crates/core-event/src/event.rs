@@ -1,7 +1,7 @@
 //! 事件枚举定义模块
 //! 所有事件均不可变，描述已经发生的事情，携带最小必要 payload
 
-use core_common::{ChannelId, ChannelType, SessionId};
+use core_common::{ChannelId, ChannelType, HostId, SessionId};
 use serde::{Deserialize, Serialize};
 
 /// 顶层事件枚举，按来源划分为 Application 和 System 两类
@@ -16,6 +16,7 @@ pub enum CoreEvent {
     Credential(CredentialEvent),
     Session(SessionEvent),
     Channel(ChannelEvent),
+    Host(HostEvent),
 }
 
 /// 应用生命周期事件
@@ -120,6 +121,15 @@ pub enum ChannelEvent {
     DataReceived { session_id: SessionId, channel_id: ChannelId, data: Vec<u8> },
     /// 通道已关闭
     Closed { session_id: SessionId, channel_id: ChannelId },
+}
+
+/// 主机管理事件
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail")]
+pub enum HostEvent {
+    Created { host_id: HostId, name: String },
+    Updated { host_id: HostId, name: String },
+    Deleted { host_id: HostId, name: String },
 }
 
 #[cfg(test)]

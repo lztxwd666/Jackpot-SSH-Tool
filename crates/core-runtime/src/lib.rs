@@ -21,3 +21,5 @@ pub use repository::Repository;
 pub use runtime::CoreRuntime;
 pub use service::Service;
 pub use session::Session;
+
+pub use core_common::HostRepository;

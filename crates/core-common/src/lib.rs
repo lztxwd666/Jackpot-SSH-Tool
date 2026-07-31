@@ -4,6 +4,7 @@
 pub mod config;
 pub mod credential;
 pub mod error;
+pub mod host;
 pub mod id;
 pub mod knownhosts;
 pub mod ssh;
@@ -11,6 +12,7 @@ pub mod ssh;
 pub use config::{Config, DefaultConfig};
 pub use credential::{ConfigCredentialProvider, CredentialProvider};
 pub use error::{CoreError, CoreResult};
+pub use host::{Host, HostRepository};
 pub use id::{ChannelId, ConnectionId, HostId, SessionId, TransferId};
 pub use knownhosts::KnownHostsProvider;
 pub use ssh::{AuthMethod, ChannelState, ChannelType, ConnectionConfig, HostKeyInfo, ReconnectPolicy, SessionState};

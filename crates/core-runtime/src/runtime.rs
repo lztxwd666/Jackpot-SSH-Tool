@@ -2,6 +2,7 @@
 //! CoreRuntime 是应用的中央调度器，管理整个 crate 栈的生命周期和资源
 
 use core_common::config::Config;
+use core_common::host::HostRepository;
 use core_common::knownhosts::KnownHostsProvider;
 use core_common::CoreResult;
 use core_event::event::{ApplicationEvent, CoreEvent};
@@ -21,6 +22,7 @@ pub struct CoreRuntime {
     running: RwLock<bool>,
     connection_service: RwLock<Option<Arc<dyn ConnectionService>>>,
     known_hosts: RwLock<Option<Arc<dyn KnownHostsProvider>>>,
+    host_repo: RwLock<Option<Arc<dyn HostRepository>>>,
 }
 
 impl CoreRuntime {
@@ -34,6 +36,7 @@ impl CoreRuntime {
             running: RwLock::new(false),
             connection_service: RwLock::new(None),
             known_hosts: RwLock::new(None),
+            host_repo: RwLock::new(None),
         }
     }
 
@@ -70,6 +73,9 @@ impl CoreRuntime {
         let known_hosts: Arc<dyn KnownHostsProvider> =
             Arc::new(core_storage::SqliteKnownHosts::new(db_arc.clone()));
 
+        let host_repo: Arc<dyn HostRepository> =
+            Arc::new(core_storage::SqliteHostRepository::new(db_arc.clone()));
+
         let conn_service: Arc<dyn ConnectionService> = Arc::new(
             SshConnectionService::new(self.dispatcher.clone())
                 .with_known_hosts(known_hosts.clone()),
@@ -82,6 +88,10 @@ impl CoreRuntime {
         {
             let mut kh_lock = self.known_hosts.write().await;
             *kh_lock = Some(known_hosts);
+        }
+        {
+            let mut hr_lock = self.host_repo.write().await;
+            *hr_lock = Some(host_repo);
         }
         {
             let mut cs_lock = self.connection_service.write().await;
@@ -105,6 +115,11 @@ impl CoreRuntime {
         self.known_hosts.read().await.clone()
     }
 
+    /// 获取 HostRepository 的引用（仅在 start() 后有效）
+    pub async fn host_repo(&self) -> Option<Arc<dyn HostRepository>> {
+        self.host_repo.read().await.clone()
+    }
+
     /// 优雅关闭运行时：断开连接、销毁 Provider、关闭数据库
     pub async fn shutdown(&self) {
         self.dispatcher
@@ -120,6 +135,10 @@ impl CoreRuntime {
         {
             let mut cs_lock = self.connection_service.write().await;
             *cs_lock = None;
+        }
+        {
+            let mut hr_lock = self.host_repo.write().await;
+            *hr_lock = None;
         }
         {
             let mut kh_lock = self.known_hosts.write().await;

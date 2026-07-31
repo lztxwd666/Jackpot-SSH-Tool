@@ -609,6 +609,7 @@ dependencies = [
  "tauri-build",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

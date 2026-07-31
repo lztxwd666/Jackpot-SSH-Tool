@@ -162,7 +162,7 @@ impl Session {
 
     /// 获取当前 Session 状态
     pub fn state(&self) -> SessionState {
-        self.state.blocking_read().clone()
+        *self.state.blocking_read()
     }
 
     /// 检查 Session 是否已连接

@@ -39,15 +39,29 @@ impl ConnectionConfig {
 }
 
 /// SSH 认证方式
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "data")]
 pub enum AuthMethod {
     /// 密码认证
     Password(String),
     /// 私钥文件认证，可选口令
     PrivateKey { path: PathBuf, passphrase: Option<String> },
-    /// SSH Agent 认证（阶段 2a 暂不实现）
+    /// SSH Agent 认证（暂未实现）
     Agent,
+}
+
+impl std::fmt::Debug for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Password(_) => f.debug_tuple("Password").field(&"***").finish(),
+            Self::PrivateKey { path, passphrase } => f
+                .debug_struct("PrivateKey")
+                .field("path", path)
+                .field("passphrase", &passphrase.as_ref().map(|_| "***"))
+                .finish(),
+            Self::Agent => f.debug_tuple("Agent").finish(),
+        }
+    }
 }
 
 /// 主机密钥信息，用于 known_hosts 验证
@@ -66,7 +80,7 @@ impl HostKeyInfo {
 }
 
 /// Session 生命周期状态
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SessionState {
     Created,
     Connecting,
@@ -76,7 +90,7 @@ pub enum SessionState {
 }
 
 /// SSH 通道类型
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelType {
     Shell,
     Sftp,
@@ -84,7 +98,7 @@ pub enum ChannelType {
 }
 
 /// 通道生命周期状态
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChannelState {
     Opening,
     Open,

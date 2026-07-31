@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 core-common = { path = "../core-common" }
 core-event = { path = "../core-event" }
 core-runtime = { path = "../core-runtime" }
