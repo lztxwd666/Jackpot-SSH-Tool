@@ -11,3 +11,4 @@ core-event = { path = "../core-event" }
 core-storage = { path = "../core-storage" }
 ssh2 = "0.9"
 base64 = "0.22"
+sha2.workspace = true

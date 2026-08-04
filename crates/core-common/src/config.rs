@@ -17,7 +17,10 @@ pub struct DefaultConfig {
 
 impl DefaultConfig {
     pub fn new(data_dir: std::path::PathBuf, log_level: String) -> Self {
-        Self { data_dir, log_level }
+        Self {
+            data_dir,
+            log_level,
+        }
     }
 }
 

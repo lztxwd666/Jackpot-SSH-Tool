@@ -16,6 +16,22 @@ macro_rules! define_id {
             pub fn new() -> Self {
                 Self(Uuid::new_v4())
             }
+
+            /// 从 UUID 字符串解析创建 ID
+            pub fn parse(id_str: &str) -> Result<Self, String> {
+                let uuid = Uuid::parse_str(id_str).map_err(|e| e.to_string())?;
+                Ok(Self(uuid))
+            }
+
+            /// 从 UUID 值直接构造（避免 serde 序列化往返）
+            pub fn from_uuid(uuid: Uuid) -> Self {
+                Self(uuid)
+            }
+
+            /// 获取内部 UUID 的引用
+            pub fn as_uuid(&self) -> &Uuid {
+                &self.0
+            }
         }
 
         impl Default for $name {
@@ -40,5 +56,3 @@ define_id!(HostId);
 define_id!(ConnectionId);
 // 数据通道的 ID（TCP port forwarding / PTY）
 define_id!(ChannelId);
-// 文件传输任务的 ID（SFTP 上传/下载）
-define_id!(TransferId);

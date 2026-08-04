@@ -3,17 +3,16 @@
 
 use core_common::{ChannelId, ChannelType, HostId, SessionId};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 
-/// 顶层事件枚举，按来源划分为 Application 和 System 两类
+/// 顶层事件枚举，按来源划分
 /// 序列化使用 serde 的 tag-based JSON 格式，方便前端 pattern match
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum CoreEvent {
     Application(ApplicationEvent),
-    System(SystemEvent),
     Connection(ConnectionEvent),
     HostKey(HostKeyEvent),
-    Credential(CredentialEvent),
     Session(SessionEvent),
     Channel(ChannelEvent),
     Host(HostEvent),
@@ -27,14 +26,6 @@ pub enum ApplicationEvent {
     Ready,
     ShutdownRequested,
     ShutdownCompleted,
-}
-
-/// 系统基础设施事件（数据库、文件系统等）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "detail")]
-pub enum SystemEvent {
-    DatabaseOpened,
-    DatabaseError(String),
 }
 
 /// SSH 连接生命周期事件
@@ -69,24 +60,15 @@ pub enum HostKeyEvent {
     /// 发现未知主机，需要用户确认
     Unknown { host: String, fingerprint: String },
     /// 主机密钥已变更，可能存在中间人攻击
-    Changed { host: String, old_fingerprint: String, new_fingerprint: String },
+    Changed {
+        host: String,
+        old_fingerprint: String,
+        new_fingerprint: String,
+    },
     /// 主机密钥已被接受
     Accepted,
     /// 用户拒绝该主机密钥
     Rejected,
-}
-
-/// 凭据操作事件
-/// 凭据值绝不出现在事件中，仅携带操作结果状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "detail")]
-pub enum CredentialEvent {
-    /// 凭据加载成功
-    Loaded,
-    /// 未找到指定凭据
-    NotFound(String),
-    /// 凭据访问被拒绝（权限问题）
-    AccessDenied(String),
 }
 
 /// Session 生命周期事件
@@ -96,7 +78,11 @@ pub enum SessionEvent {
     /// Session 已创建
     Created { session_id: SessionId },
     /// 正在连接远端主机
-    Connecting { session_id: SessionId, host: String, port: u16 },
+    Connecting {
+        session_id: SessionId,
+        host: String,
+        port: u16,
+    },
     /// 连接成功，可以打开 Channel
     Connected { session_id: SessionId },
     /// 连接已断开（可重连）
@@ -104,23 +90,44 @@ pub enum SessionEvent {
     /// 正在第 attempt 次重连尝试
     Reconnecting { session_id: SessionId, attempt: u32 },
     /// 重连失败，已达最大重试次数
-    ReconnectFailed { session_id: SessionId, reason: String },
+    ReconnectFailed {
+        session_id: SessionId,
+        reason: String,
+    },
     /// Session 永久关闭，不可再连接
     Closed { session_id: SessionId },
 }
 
 /// SSH 通道生命周期事件
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail")]
 pub enum ChannelEvent {
     /// 通道正在打开
-    Opening { session_id: SessionId, channel_id: ChannelId, channel_type: ChannelType },
+    Opening {
+        session_id: SessionId,
+        channel_id: ChannelId,
+        channel_type: ChannelType,
+    },
     /// 通道已打开，可以读写
-    Opened { session_id: SessionId, channel_id: ChannelId },
+    Opened {
+        session_id: SessionId,
+        channel_id: ChannelId,
+    },
     /// 收到远端数据
-    DataReceived { session_id: SessionId, channel_id: ChannelId, data: Vec<u8> },
+    /// data 使用 base64 编码传输：相比 JSON 数字数组（每字节 ~5 字符）压缩到 ~1.33x，
+    /// 显著降低高吞吐终端输出时的 IPC 带宽与序列化开销
+    DataReceived {
+        session_id: SessionId,
+        channel_id: ChannelId,
+        #[serde_as(as = "serde_with::base64::Base64")]
+        data: Vec<u8>,
+    },
     /// 通道已关闭
-    Closed { session_id: SessionId, channel_id: ChannelId },
+    Closed {
+        session_id: SessionId,
+        channel_id: ChannelId,
+    },
 }
 
 /// 主机管理事件

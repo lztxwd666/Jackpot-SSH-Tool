@@ -1,7 +1,7 @@
 //! 主机模型模块
 
-use serde::{Deserialize, Serialize};
 use crate::HostId;
+use serde::{Deserialize, Serialize};
 
 /// 一个已保存的 SSH 主机连接配置
 #[derive(Debug, Clone, Serialize, Deserialize)]

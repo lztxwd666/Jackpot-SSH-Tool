@@ -17,7 +17,11 @@ impl SqliteKnownHosts {
 }
 
 impl core_common::knownhosts::KnownHostsProvider for SqliteKnownHosts {
-    fn find_host_key(&self, host: &str, port: u16) -> core_common::CoreResult<Option<core_common::HostKeyInfo>> {
+    fn find_host_key(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> core_common::CoreResult<Option<core_common::HostKeyInfo>> {
         let host_owned = host.to_string();
         self.db.execute(|conn| {
             let mut stmt = conn
@@ -27,17 +31,14 @@ impl core_common::knownhosts::KnownHostsProvider for SqliteKnownHosts {
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
             let rows: Vec<Result<core_common::HostKeyInfo, _>> = stmt
-                .query_map(
-                    rusqlite::params![host_owned, port],
-                    |row| {
-                        Ok(core_common::HostKeyInfo {
-                            host: host_owned.clone(),
-                            port,
-                            key_type: row.get(0)?,
-                            fingerprint: row.get(1)?,
-                        })
-                    },
-                )
+                .query_map(rusqlite::params![host_owned, port], |row| {
+                    Ok(core_common::HostKeyInfo {
+                        host: host_owned.clone(),
+                        port,
+                        key_type: row.get(0)?,
+                        fingerprint: row.get(1)?,
+                    })
+                })
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?
                 .collect();
 
@@ -80,16 +81,25 @@ mod tests {
     use crate::db::Database;
     use core_common::knownhosts::KnownHostsProvider;
 
-    fn setup_db() -> Arc<Database> {
-        let dir = std::env::temp_dir().join(format!("jackpot-test-knownhosts-{}", uuid::Uuid::new_v4()));
+    /// 临时目录守卫：测试结束（含 panic）时自动清理
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_db() -> (Arc<Database>, TempDirGuard) {
+        let dir =
+            std::env::temp_dir().join(format!("jackpot-test-knownhosts-{}", uuid::Uuid::new_v4()));
         let db = Database::open(&dir).unwrap();
         db.migrate().unwrap();
-        Arc::new(db)
+        (Arc::new(db), TempDirGuard(dir))
     }
 
     #[test]
     fn test_store_and_find_host_key() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let provider = SqliteKnownHosts::new(db.clone());
 
         let info = core_common::HostKeyInfo::new(
@@ -109,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_remove_host_key() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let provider = SqliteKnownHosts::new(db.clone());
 
         let info = core_common::HostKeyInfo::new(

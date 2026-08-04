@@ -4,5 +4,10 @@
 pub mod dispatcher;
 pub mod event;
 
-pub use dispatcher::{ChannelDispatcher, EventDispatcher, LoggingDispatcher, SharedEventDispatcher};
-pub use event::{ApplicationEvent, ChannelEvent, CoreEvent, CredentialEvent, ConnectionEvent, HostEvent, HostKeyEvent, SessionEvent, SystemEvent};
+pub use dispatcher::{
+    ChannelDispatcher, EventDispatcher, LoggingDispatcher, SharedEventDispatcher,
+};
+pub use event::{
+    ApplicationEvent, ChannelEvent, ConnectionEvent, CoreEvent, HostEvent, HostKeyEvent,
+    SessionEvent,
+};

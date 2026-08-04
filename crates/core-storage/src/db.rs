@@ -80,8 +80,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("jackpot-test-{}", uuid::Uuid::new_v4()));
-        dir
+        std::env::temp_dir().join(format!("jackpot-test-{}", uuid::Uuid::new_v4()))
     }
 
     #[test]

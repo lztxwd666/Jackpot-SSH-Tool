@@ -12,6 +12,9 @@ use core_event::EventDispatcher;
 use std::io::{Read, Write};
 use std::sync::{Arc, RwLock};
 
+/// SFTP 文件传输操作子模块
+pub(crate) mod sftp;
+
 /// 内部通道类型，统一包装 ssh2::Channel 和 ssh2::Sftp
 enum ChannelInner {
     Session(ssh2::Channel),
@@ -46,15 +49,17 @@ impl Channel {
     ) -> CoreResult<Arc<Self>> {
         let channel = Self::create(session_id, ChannelType::Shell, dispatcher.clone())?;
 
-        channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
-            session_id: channel.session_id,
-            channel_id: channel.id,
-            channel_type: channel.channel_type,
-        }));
+        channel
+            .dispatcher
+            .dispatch(CoreEvent::Channel(ChannelEvent::Opening {
+                session_id: channel.session_id,
+                channel_id: channel.id,
+                channel_type: channel.channel_type,
+            }));
 
-        let mut inner_ch = ssh_session
-            .channel_session()
-            .map_err(|e| core_common::CoreError::Internal(format!("open channel session failed: {e}")))?;
+        let mut inner_ch = ssh_session.channel_session().map_err(|e| {
+            core_common::CoreError::Internal(format!("open channel session failed: {e}"))
+        })?;
 
         // 设置标准 PTY 终端模式（与 OpenSSH 行为对齐）
         // 必须显式设置模式，否则服务端默认值可能关闭回显等关键功能
@@ -68,7 +73,11 @@ impl Channel {
 
         let pty = PtySize::default();
         inner_ch
-            .request_pty("xterm-256color", Some(modes), Some((pty.cols, pty.rows, pty.width_px, pty.height_px)))
+            .request_pty(
+                "xterm-256color",
+                Some(modes),
+                Some((pty.cols, pty.rows, pty.width_px, pty.height_px)),
+            )
             .map_err(|e| core_common::CoreError::Internal(format!("request pty failed: {e}")))?;
 
         inner_ch
@@ -86,14 +95,16 @@ impl Channel {
         }
 
         {
-            let mut state = channel.state.write().unwrap();
+            let mut state = crate::rw_write(&channel.state);
             *state = ChannelState::Open;
         }
 
-        channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opened {
-            session_id: channel.session_id,
-            channel_id: channel.id,
-        }));
+        channel
+            .dispatcher
+            .dispatch(CoreEvent::Channel(ChannelEvent::Opened {
+                session_id: channel.session_id,
+                channel_id: channel.id,
+            }));
 
         tracing::info!(channel_id = %channel.id, session_id = %session_id, "shell channel opened (nonblocking)");
         Ok(channel)
@@ -106,16 +117,20 @@ impl Channel {
     ) -> CoreResult<Arc<Self>> {
         let channel = Self::create(session_id, ChannelType::Sftp, dispatcher.clone())?;
 
-        channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
-            session_id: channel.session_id,
-            channel_id: channel.id,
-            channel_type: channel.channel_type,
-        }));
+        channel
+            .dispatcher
+            .dispatch(CoreEvent::Channel(ChannelEvent::Opening {
+                session_id: channel.session_id,
+                channel_id: channel.id,
+                channel_type: channel.channel_type,
+            }));
 
+        // SFTP 初始化需要在阻塞模式下完成（握手需要多次往返）
+        // 临时切换回阻塞模式，初始化完成后再切回非阻塞
+        ssh_session.set_blocking(true);
         let sftp = ssh_session
             .sftp()
             .map_err(|e| core_common::CoreError::Internal(format!("open sftp failed: {e}")))?;
-
         ssh_session.set_blocking(false);
 
         {
@@ -126,77 +141,75 @@ impl Channel {
         }
 
         {
-            let mut state = channel.state.write().unwrap();
+            let mut state = crate::rw_write(&channel.state);
             *state = ChannelState::Open;
         }
 
-        channel.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opened {
-            session_id: channel.session_id,
-            channel_id: channel.id,
-        }));
+        channel
+            .dispatcher
+            .dispatch(CoreEvent::Channel(ChannelEvent::Opened {
+                session_id: channel.session_id,
+                channel_id: channel.id,
+            }));
 
         tracing::info!(channel_id = %channel.id, session_id = %session_id, "sftp channel opened");
         Ok(channel)
     }
 
     /// 读取通道数据（非阻塞模式）
-    /// 有数据时返回数据并发送 DataReceived 事件；无数据时返回空 Vec
-    pub async fn read(&self, len: usize) -> CoreResult<Vec<u8>> {
+    /// 读取的数据直接通过 DataReceived 事件分发（所有权转移，零拷贝）；
+    /// 返回读取的字节数（0 表示无数据，调用方据此决定是否休眠轮询）。
+    /// 会话为非阻塞模式，read 立即返回（EAGAIN），无需 spawn_blocking 调度开销；
+    /// 锁仅短暂持有（微秒级），直接执行避免线程池往返
+    pub async fn read(&self, len: usize) -> CoreResult<usize> {
         if !self.is_open() {
             return Err(core_common::CoreError::Internal("channel is closed".into()));
         }
 
-        let inner = self.inner.clone();
-        let channel_id = self.id;
-        let session_id = self.session_id;
-        let dispatcher = self.dispatcher.clone();
+        let mut guard = self.inner.lock().map_err(|e| {
+            core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
+        })?;
+        let ch_inner = guard
+            .as_mut()
+            .ok_or_else(|| core_common::CoreError::Internal("channel not open".into()))?;
 
-        let data = tokio::task::spawn_blocking(move || {
-            let mut guard = inner.lock().map_err(|e| {
-                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
-            })?;
-            let ch_inner = guard.as_mut().ok_or_else(|| {
-                core_common::CoreError::Internal("channel not open".into())
-            })?;
-
-            match ch_inner {
-                ChannelInner::Session(ref mut ch) => {
-                    let mut buf = vec![0u8; len];
-                    match ch.read(&mut buf) {
-                        Ok(n) => {
-                            buf.truncate(n);
-                            Ok(buf)
-                        }
-                        Err(e) => {
-                            // 非阻塞模式下无数据时返回 EAGAIN(-37)，消息含 "would block"
-                            let msg = format!("{e}").to_lowercase();
-                            if msg.contains("would block") || msg.contains("-37") {
-                                Ok(Vec::new())
-                            } else {
-                                Err(core_common::CoreError::Internal(format!(
-                                    "channel read failed: {e}"
-                                )))
-                            }
+        let n = match ch_inner {
+            ChannelInner::Session(ch) => {
+                // 栈数组替代堆分配：空闲轮询（EAGAIN）时零分配
+                let mut buf = [0u8; 4096];
+                let cap = buf.len().min(len);
+                match ch.read(&mut buf[..cap]) {
+                    Ok(n) => {
+                        let data = Vec::from(&buf[..n]);
+                        self.dispatcher
+                            .dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
+                                session_id: self.session_id,
+                                channel_id: self.id,
+                                data,
+                            }));
+                        n
+                    }
+                    Err(e) => {
+                        // 非阻塞模式下无数据时返回 EAGAIN(-37)，消息含 "would block"
+                        if crate::ssh::is_would_block(&e) {
+                            0
+                        } else {
+                            return Err(core_common::CoreError::Internal(format!(
+                                "channel read failed: {e}"
+                            )));
                         }
                     }
                 }
-                ChannelInner::Sftp(_) => Err(core_common::CoreError::Internal(
-                    "read not supported on sftp channel".into(),
-                )),
             }
-        })
-        .await
-        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))??;
+            ChannelInner::Sftp(_) => {
+                return Err(core_common::CoreError::Internal(
+                    "read not supported on sftp channel".into(),
+                ));
+            }
+        };
+        drop(guard);
 
-        if !data.is_empty() {
-            dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
-                session_id,
-                channel_id,
-                data: data.clone(),
-            }));
-        }
-
-        Ok(data)
+        Ok(n)
     }
 
     /// 向通道写入数据（非阻塞模式）
@@ -211,12 +224,12 @@ impl Channel {
             let mut guard = inner.lock().map_err(|e| {
                 core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
             })?;
-            let ch_inner = guard.as_mut().ok_or_else(|| {
-                core_common::CoreError::Internal("channel not open".into())
-            })?;
+            let ch_inner = guard
+                .as_mut()
+                .ok_or_else(|| core_common::CoreError::Internal("channel not open".into()))?;
 
             match ch_inner {
-                ChannelInner::Session(ref mut ch) => ch.write(&data).map_err(|e| {
+                ChannelInner::Session(ch) => ch.write(&data).map_err(|e| {
                     core_common::CoreError::Internal(format!("channel write failed: {e}"))
                 }),
                 ChannelInner::Sftp(_) => Err(core_common::CoreError::Internal(
@@ -230,24 +243,32 @@ impl Channel {
 
     /// 关闭通道
     /// 因非阻塞模式下锁立即可用，不会卡住
+    /// 注意：ch.close() / ch.wait_close() 是阻塞调用（等待远端确认），
+    /// 调用方必须确保在 spawn_blocking / blocking 上下文中调用，禁止在 async 任务中直接调用。
+    /// 设计：先从锁中取出 inner 再释放锁，阻塞的 wait_close() 在锁外执行，
+    /// 避免关闭期间阻塞其他通道操作。
     pub fn close(&self) -> CoreResult<()> {
         {
-            let state = self.state.read().unwrap();
+            let state = crate::rw_read(&self.state);
             if *state == ChannelState::Closed || *state == ChannelState::Closing {
                 return Ok(());
             }
         }
 
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = crate::rw_write(&self.state);
             *state = ChannelState::Closing;
         }
 
-        let mut guard = self.inner.lock().map_err(|e| {
-            core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
-        })?;
+        // 取出 inner 并立即释放锁：阻塞的 close/wait_close 在锁外执行
+        let inner = {
+            let mut guard = self.inner.lock().map_err(|e| {
+                core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
+            })?;
+            guard.take()
+        };
 
-        if let Some(inner) = guard.take() {
+        if let Some(inner) = inner {
             match inner {
                 ChannelInner::Session(mut ch) => {
                     let _ = ch.close();
@@ -258,14 +279,15 @@ impl Channel {
         }
 
         {
-            let mut state = self.state.write().unwrap();
+            let mut state = crate::rw_write(&self.state);
             *state = ChannelState::Closed;
         }
 
-        self.dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Closed {
-            session_id: self.session_id,
-            channel_id: self.id,
-        }));
+        self.dispatcher
+            .dispatch(CoreEvent::Channel(ChannelEvent::Closed {
+                session_id: self.session_id,
+                channel_id: self.id,
+            }));
 
         tracing::info!(channel_id = %self.id, "channel closed");
         Ok(())
@@ -273,13 +295,15 @@ impl Channel {
 
     /// 调整终端 PTY 尺寸
     /// 用于响应前端窗口尺寸变化
-    pub fn resize_pty(&self, cols: u32, rows: u32) -> CoreResult<()> {
+    /// 阻塞操作放入 spawn_blocking，与全局调用模式保持一致
+    pub async fn resize_pty(&self, cols: u32, rows: u32) -> CoreResult<()> {
         if !self.is_open() {
             return Err(core_common::CoreError::Internal("channel is closed".into()));
         }
 
-        tokio::task::block_in_place(|| {
-            let mut guard = self.inner.lock().map_err(|e| {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut guard = inner.lock().map_err(|e| {
                 core_common::CoreError::Internal(format!("lock channel inner failed: {e}"))
             })?;
             if let Some(ChannelInner::Session(ref mut ch)) = *guard {
@@ -290,10 +314,13 @@ impl Channel {
             }
             Ok(())
         })
+        .await
+        .map_err(|e| core_common::CoreError::Internal(format!("spawn_blocking failed: {e}")))?
     }
 
     /// 启动后台读取循环
-    /// 非阻塞轮询：有数据时立即处理，无数据时 sleep 10ms 后重试
+    /// 非阻塞轮询：有数据时立即处理，无数据时 sleep 25ms 后重试
+    /// （25ms 在终端交互感知内，将空闲唤醒频率从 100 次/秒降至 40 次/秒）
     pub fn start_read_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let channel = self.clone();
         tokio::spawn(async move {
@@ -302,12 +329,13 @@ impl Channel {
                     break;
                 }
                 match channel.read(4096).await {
-                    Ok(data) => {
-                        if data.is_empty() {
-                            // 非阻塞模式无数据，短暂休眠后重试
-                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-                            continue;
-                        }
+                    Ok(0) => {
+                        // 非阻塞模式无数据，短暂休眠后重试
+                        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                        continue;
+                    }
+                    Ok(_) => {
+                        // 有数据（已通过事件分发），立即继续读取
                     }
                     Err(e) => {
                         tracing::debug!(channel_id = %channel.id, error = %e, "read loop exiting");
@@ -319,11 +347,11 @@ impl Channel {
     }
 
     pub fn state(&self) -> ChannelState {
-        *self.state.read().unwrap()
+        *crate::rw_read(&self.state)
     }
 
     pub fn is_open(&self) -> bool {
-        *self.state.read().unwrap() == ChannelState::Open
+        *crate::rw_read(&self.state) == ChannelState::Open
     }
 
     fn create(

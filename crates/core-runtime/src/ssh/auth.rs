@@ -9,18 +9,24 @@ use ssh2::Session;
 pub fn authenticate(session: &Session, username: &str, auth_method: &AuthMethod) -> CoreResult<()> {
     match auth_method {
         AuthMethod::Password(password) => {
-            session.userauth_password(username, password)
-                .map_err(|e| core_common::CoreError::Internal(format!("password auth failed: {e}")))?;
+            session.userauth_password(username, password).map_err(|e| {
+                core_common::CoreError::Internal(format!("password auth failed: {e}"))
+            })?;
             tracing::info!(username, "password authentication succeeded");
         }
         AuthMethod::PrivateKey { path, passphrase } => {
             let pass = passphrase.as_deref();
-            session.userauth_pubkey_file(username, None, path.as_path(), pass)
-                .map_err(|e| core_common::CoreError::Internal(format!("publickey auth failed: {e}")))?;
+            session
+                .userauth_pubkey_file(username, None, path.as_path(), pass)
+                .map_err(|e| {
+                    core_common::CoreError::Internal(format!("publickey auth failed: {e}"))
+                })?;
             tracing::info!(username, key_path = %path.display(), "publickey authentication succeeded");
         }
         AuthMethod::Agent => {
-            return Err(core_common::CoreError::Internal("SSH agent authentication not yet supported".into()));
+            return Err(core_common::CoreError::Internal(
+                "SSH agent authentication not yet supported".into(),
+            ));
         }
     }
     Ok(())

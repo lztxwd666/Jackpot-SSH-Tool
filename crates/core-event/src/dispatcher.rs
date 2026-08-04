@@ -40,6 +40,8 @@ impl ChannelDispatcher {
 
 impl EventDispatcher for ChannelDispatcher {
     fn dispatch(&self, event: CoreEvent) {
+        // send 失败仅表示当前无接收者（正常情况，无订阅者时不产生事件处理）
+        // 慢接收者导致的事件丢弃在 recv 侧检测（RecvError::Lagged），由订阅方负责告警
         let _ = self.sender.send(event);
     }
 }

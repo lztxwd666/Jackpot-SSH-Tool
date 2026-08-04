@@ -6,6 +6,7 @@ use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider};
 use core_event::event::{ConnectionEvent, CoreEvent, HostKeyEvent};
 use core_event::EventDispatcher;
 use ssh2::Session;
+use std::io::Read;
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,7 +39,19 @@ impl SshConnection {
 
     /// 建立完整的 SSH 连接：TCP 连接 → SSH 握手 → HostKey 验证 → 认证
     /// 每个阶段完成后通过 dispatcher 发出对应的 ConnectionEvent
+    /// 失败时统一分发 ConnectionEvent::Failed 后返回错误
     pub fn connect(&mut self) -> CoreResult<()> {
+        let result = self.connect_inner();
+        if let Err(e) = &result {
+            self.dispatcher
+                .dispatch(CoreEvent::Connection(ConnectionEvent::Failed {
+                    reason: e.to_string(),
+                }));
+        }
+        result
+    }
+
+    fn connect_inner(&mut self) -> CoreResult<()> {
         let addr = format!("{}:{}", self.config.host, self.config.port);
 
         self.dispatcher
@@ -62,9 +75,8 @@ impl SshConnection {
             core_common::CoreError::Internal(format!("set read timeout failed: {e}"))
         })?;
         // 禁用 Nagle 算法，确保键盘输入小包立即发送
-        tcp.set_nodelay(true).map_err(|e| {
-            core_common::CoreError::Internal(format!("set nodelay failed: {e}"))
-        })?;
+        tcp.set_nodelay(true)
+            .map_err(|e| core_common::CoreError::Internal(format!("set nodelay failed: {e}")))?;
 
         self.dispatcher
             .dispatch(CoreEvent::Connection(ConnectionEvent::TcpConnected));
@@ -90,23 +102,32 @@ impl SshConnection {
         if let Some(ref known_hosts) = self.known_hosts {
             match known_hosts.find_host_key(&self.config.host, self.config.port)? {
                 None => {
+                    // 未知主机密钥：发出事件并中止连接（TOFU 流程）
+                    // 用户确认后通过 approve_host_key 存储密钥，然后重新连接
                     self.dispatcher
                         .dispatch(CoreEvent::HostKey(HostKeyEvent::Unknown {
                             host: self.config.host.clone(),
                             fingerprint: host_key_info.fingerprint.clone(),
                         }));
+                    return Err(core_common::CoreError::HostKeyUnknown {
+                        fingerprint: host_key_info.fingerprint.clone(),
+                    });
                 }
                 Some(stored) => {
                     if stored.fingerprint == host_key_info.fingerprint {
                         self.dispatcher
                             .dispatch(CoreEvent::HostKey(HostKeyEvent::Accepted));
                     } else {
+                        // 密钥变更（可能 MITM）：发出事件并中止连接
                         self.dispatcher
-                            .dispatch(CoreEvent::HostKey(HostKeyEvent::Rejected));
-                        return Err(core_common::CoreError::Internal(format!(
-                            "host key verification failed for {}: fingerprint mismatch",
-                            self.config.host
-                        )));
+                            .dispatch(CoreEvent::HostKey(HostKeyEvent::Changed {
+                                host: self.config.host.clone(),
+                                old_fingerprint: stored.fingerprint.clone(),
+                                new_fingerprint: host_key_info.fingerprint.clone(),
+                            }));
+                        return Err(core_common::CoreError::HostKeyChanged {
+                            fingerprint: host_key_info.fingerprint.clone(),
+                        });
                     }
                 }
             }
@@ -148,10 +169,109 @@ impl SshConnection {
     pub fn session(&self) -> Option<&Session> {
         self.session.as_ref()
     }
+
+    /// 执行远程命令并返回 stdout
+    /// 会话处于非阻塞模式：打开通道、发送请求、读取输出都可能返回 EAGAIN，
+    /// 每个阶段都做重试，不切换全局 blocking flag
+    pub fn exec_command(&self, command: &str) -> CoreResult<String> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| core_common::CoreError::Internal("no active session".into()))?;
+
+        // EAGAIN 重试采用指数退避：2ms → 4ms → ... → 32ms 封顶
+        let mut backoff = 2u64;
+        let mut sleep_backoff = || {
+            std::thread::sleep(std::time::Duration::from_millis(backoff));
+            backoff = (backoff * 2).min(32);
+        };
+
+        // 打开 exec 通道（非阻塞模式下可能 EAGAIN）
+        let mut ch = loop {
+            match session.channel_session() {
+                Ok(ch) => break ch,
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        sleep_backoff();
+                        continue;
+                    }
+                    return Err(core_common::CoreError::Internal(format!(
+                        "open exec channel failed: {e}"
+                    )));
+                }
+            }
+        };
+
+        // 发送 exec 请求（非阻塞模式下可能 EAGAIN）
+        loop {
+            match ch.exec(command) {
+                Ok(()) => break,
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        sleep_backoff();
+                        continue;
+                    }
+                    return Err(core_common::CoreError::Internal(format!(
+                        "exec failed: {e}"
+                    )));
+                }
+            }
+        }
+
+        // 读取输出（非阻塞模式下可能 EAGAIN）
+        // 累积原始字节，最后一次性解码：避免多字节 UTF-8 跨块边界被 from_utf8_lossy 损坏
+        let mut raw = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            match ch.read(&mut buf) {
+                Ok(0) => break, // EOF
+                Ok(n) => raw.extend_from_slice(&buf[..n]),
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        sleep_backoff();
+                        continue;
+                    }
+                    return Err(core_common::CoreError::Internal(format!(
+                        "exec read failed: {e}"
+                    )));
+                }
+            }
+        }
+        let out = String::from_utf8(raw).map_err(|e| {
+            core_common::CoreError::Internal(format!("exec output not valid UTF-8: {e}"))
+        })?;
+        Ok(out.trim().to_string())
+    }
 }
 
 impl Drop for SshConnection {
     fn drop(&mut self) {
         let _ = self.disconnect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ssh::is_would_block;
+    use ssh2::{Error, ErrorCode};
+
+    #[test]
+    fn test_is_would_block_matches_libssh2_eagain() {
+        // 非阻塞模式下 libssh2 返回 EAGAIN 的 Display 格式（锁定当前 ssh2 0.9.6 行为）
+        let e = Error::new(
+            ErrorCode::Session(-37),
+            "Would block waiting for status message",
+        );
+        assert!(is_would_block(&e));
+        let e2 = Error::new(ErrorCode::Session(-37), "would block");
+        assert!(is_would_block(&e2));
+    }
+
+    #[test]
+    fn test_is_would_block_rejects_real_errors() {
+        let e = Error::new(ErrorCode::Session(-1), "connection refused");
+        assert!(!is_would_block(&e));
+        let e2 = Error::new(ErrorCode::SFTP(3), "no such file");
+        assert!(!is_would_block(&e2));
     }
 }

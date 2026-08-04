@@ -131,10 +131,20 @@ Vue 3 Composition API (`<script setup>`). Single `App.vue` with sidebar (host li
 - All code comments in **Chinese** (中文)
 - Avoid `=` or `-` as comment separators
 - Technical terms (CPU, RAM, SSH, PTY, SFTP, etc.) remain in English
-- `unsafe` blocks annotated with `// SAFETY:` comments
+- `unsafe` is allowed but minimized: some operations (raw FFI, custom layouts) are impossible without it — that is a Rust limitation, not an error. Every `unsafe` block MUST be annotated with a `// SAFETY:` comment explaining the invariants that make it sound. Prefer safe wrappers that encapsulate `unsafe` behind a narrow, well-tested interface. Zero `unsafe` remains the goal for new code when a safe alternative exists
 - **No emojis** in code or comments
 - All public event/ID types implement `Debug + Clone + Serialize + Deserialize`
 - `CoreRuntime::start()` guards against double-call
 - Crate names use hyphens in Cargo.toml (`core-common`), Rust code uses underscores (`core_common`)
 - `tracing` for logging; `thiserror` for error types; `serde` with tag-based JSON for events
 - Deps: `ssh2` 0.9, `rusqlite` 0.31 (bundled), `tokio` full, `tauri` 2
+
+## UI Language Rules
+
+- **Language division of labor**: UI/UX strings are English (default) or Chinese (user-selectable) for broad user reach; the developer's working language is Chinese — code comments, commit messages, and internal documentation stay in Chinese per project convention
+- UI supports **English (en) and Chinese (zh)** out of the box, switchable via the sidebar footer selector; the choice persists in localStorage
+- ALL user-visible strings (buttons, menus, toasts, dialogs, placeholders, titles) MUST go through `t()` from `crates/desktop/ui/src/composables/i18n.ts` — never hardcode UI strings in components
+- Adding a language requires: (1) a new locale entry in `messages` in `i18n.ts`, (2) adding the locale to the `Locale` type and the sidebar selector
+- `currentLocale` is a Vue ref — switching language re-renders all components automatically
+- File contents, file names, and SSH output are NOT UI strings — do not translate them
+- Code comments still follow the Chinese convention above

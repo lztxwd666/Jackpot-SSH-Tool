@@ -3,8 +3,8 @@
 
 pub mod db;
 pub mod host_repo;
-pub mod migrations;
 pub mod knownhosts;
+pub mod migrations;
 
 pub use db::Database;
 pub use host_repo::SqliteHostRepository;

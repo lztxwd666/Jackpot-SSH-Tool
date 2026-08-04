@@ -45,7 +45,10 @@ pub enum AuthMethod {
     /// 密码认证
     Password(String),
     /// 私钥文件认证，可选口令
-    PrivateKey { path: PathBuf, passphrase: Option<String> },
+    PrivateKey {
+        path: PathBuf,
+        passphrase: Option<String>,
+    },
     /// SSH Agent 认证（暂未实现）
     Agent,
 }
@@ -75,7 +78,12 @@ pub struct HostKeyInfo {
 
 impl HostKeyInfo {
     pub fn new(host: String, port: u16, key_type: String, fingerprint: String) -> Self {
-        Self { host, port, key_type, fingerprint }
+        Self {
+            host,
+            port,
+            key_type,
+            fingerprint,
+        }
     }
 }
 
@@ -94,7 +102,6 @@ pub enum SessionState {
 pub enum ChannelType {
     Shell,
     Sftp,
-    Exec,
 }
 
 /// 通道生命周期状态
@@ -117,7 +124,12 @@ pub struct PtySize {
 
 impl Default for PtySize {
     fn default() -> Self {
-        Self { cols: 80, rows: 24, width_px: 0, height_px: 0 }
+        Self {
+            cols: 80,
+            rows: 24,
+            width_px: 0,
+            height_px: 0,
+        }
     }
 }
 
@@ -135,7 +147,9 @@ pub struct ReconnectPolicy {
 impl ReconnectPolicy {
     /// 计算第 attempt 次重试的延迟（attempt 从 1 开始）
     pub fn delay_for(&self, attempt: u32) -> u64 {
-        let delay = self.base_delay_secs.saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)));
+        let delay = self
+            .base_delay_secs
+            .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)));
         delay.min(self.max_delay_secs)
     }
 }
@@ -148,4 +162,14 @@ impl Default for ReconnectPolicy {
             max_delay_secs: 30,
         }
     }
+}
+
+/// SFTP 文件/目录条目
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub modified: String,
 }

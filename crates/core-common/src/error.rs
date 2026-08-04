@@ -21,6 +21,14 @@ pub enum CoreError {
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// 未知主机密钥：连接被中止，等待用户确认后重试
+    #[error("host key unknown: {fingerprint}")]
+    HostKeyUnknown { fingerprint: String },
+
+    /// 主机密钥已变更，连接被中止
+    #[error("host key changed: {fingerprint}")]
+    HostKeyChanged { fingerprint: String },
 }
 
 /// 项目统一的 Result 别名，简化函数签名

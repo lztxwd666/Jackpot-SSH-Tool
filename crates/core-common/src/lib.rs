@@ -10,20 +10,22 @@ pub mod knownhosts;
 pub mod ssh;
 
 pub use config::{Config, DefaultConfig};
-pub use credential::{ConfigCredentialProvider, CredentialProvider};
+pub use credential::CredentialProvider;
 pub use error::{CoreError, CoreResult};
 pub use host::{Host, HostRepository};
-pub use id::{ChannelId, ConnectionId, HostId, SessionId, TransferId};
+pub use id::{ChannelId, ConnectionId, HostId, SessionId};
 pub use knownhosts::KnownHostsProvider;
-pub use ssh::{AuthMethod, ChannelState, ChannelType, ConnectionConfig, HostKeyInfo, PtySize, ReconnectPolicy, SessionState};
+pub use ssh::{
+    AuthMethod, ChannelState, ChannelType, ConnectionConfig, FileEntry, HostKeyInfo, PtySize,
+    ReconnectPolicy, SessionState,
+};
 
 /// 初始化全局 tracing 日志订阅器
 /// 优先使用环境变量 RUST_LOG，fallback 到传入的 level 参数
 pub fn init_logging(level: &str) {
     use tracing_subscriber::EnvFilter;
 
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)

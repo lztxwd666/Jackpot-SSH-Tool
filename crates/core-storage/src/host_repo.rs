@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use core_common::{CoreResult, Host, HostId, HostRepository};
 use crate::db::Database;
+use core_common::{CoreResult, Host, HostId, HostRepository};
 
 /// 基于 SQLite 的 HostRepository 实现
 pub struct SqliteHostRepository {
@@ -18,9 +18,10 @@ impl SqliteHostRepository {
 
     fn row_to_host(row: &rusqlite::Row<'_>) -> rusqlite::Result<Host> {
         let id_str: String = row.get(0)?;
-        let uuid_val = uuid::Uuid::parse_str(&id_str)
-            .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))?;
-        let host_id = host_id_from_uuid(uuid_val);
+        let uuid_val = uuid::Uuid::parse_str(&id_str).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let host_id = HostId::from_uuid(uuid_val);
         let favorite_int: i32 = row.get(6)?;
         Ok(Host {
             id: host_id,
@@ -36,13 +37,6 @@ impl SqliteHostRepository {
             updated_at: row.get(10)?,
         })
     }
-}
-
-/// 从 UUID 值重建 HostId（绕过 private 字段访问）
-/// 通过 serde 序列化/反序列化来实现转换
-fn host_id_from_uuid(u: uuid::Uuid) -> HostId {
-    let json = serde_json::to_string(&u).unwrap();
-    serde_json::from_str(&json).unwrap()
 }
 
 impl HostRepository for SqliteHostRepository {
@@ -96,8 +90,12 @@ impl HostRepository for SqliteHostRepository {
         let group_name = host.group_name.clone();
         let favorite = if host.favorite { 1 } else { 0 };
         let notes = host.notes.clone();
-        let now = chrono_now();
-        let created_at = if host.created_at.is_empty() { now.clone() } else { host.created_at.clone() };
+        let now = utc_now_iso8601();
+        let created_at = if host.created_at.is_empty() {
+            now.clone()
+        } else {
+            host.created_at.clone()
+        };
         let updated_at = now;
 
         self.db.execute(move |conn| {
@@ -120,10 +118,15 @@ impl HostRepository for SqliteHostRepository {
     }
 
     fn search(&self, query: &str) -> CoreResult<Vec<Host>> {
-        let pattern = format!("%{}%", query);
+        // 转义 LIKE 通配符（% _），使搜索按字面量匹配，避免 % 意外匹配全部主机
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{}%", escaped);
         self.db.execute(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at FROM hosts WHERE name LIKE ?1 OR address LIKE ?1")
+                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at FROM hosts WHERE name LIKE ?1 ESCAPE '\\' OR address LIKE ?1 ESCAPE '\\'")
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
             let rows = stmt
@@ -141,7 +144,7 @@ impl HostRepository for SqliteHostRepository {
 }
 
 /// 生成当前 UTC 时间的 ISO 8601 字符串（SQLite 兼容）
-fn chrono_now() -> String {
+fn utc_now_iso8601() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -181,11 +184,20 @@ mod tests {
     use super::*;
     use crate::db::Database;
 
-    fn setup_db() -> Arc<Database> {
-        let dir = std::env::temp_dir().join(format!("jackpot-test-hostrepo-{}", uuid::Uuid::new_v4()));
+    /// 临时目录守卫：测试结束（含 panic）时自动清理
+    struct TempDirGuard(std::path::PathBuf);
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn setup_db() -> (Arc<Database>, TempDirGuard) {
+        let dir =
+            std::env::temp_dir().join(format!("jackpot-test-hostrepo-{}", uuid::Uuid::new_v4()));
         let db = Database::open(&dir).unwrap();
         db.migrate().unwrap();
-        Arc::new(db)
+        (Arc::new(db), TempDirGuard(dir))
     }
 
     fn make_host(name: &str, address: &str) -> Host {
@@ -206,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_save_and_list() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let repo = SqliteHostRepository::new(db.clone());
 
         let host = make_host("test-server", "10.0.0.1");
@@ -220,7 +232,7 @@ mod tests {
 
     #[test]
     fn test_save_and_find_by_id() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let repo = SqliteHostRepository::new(db.clone());
 
         let host = make_host("web-01", "192.168.1.10");
@@ -233,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let repo = SqliteHostRepository::new(db.clone());
 
         let host = make_host("delete-me", "10.0.0.99");
@@ -247,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_search() {
-        let db = setup_db();
+        let (db, _dir) = setup_db();
         let repo = SqliteHostRepository::new(db.clone());
 
         repo.save(&make_host("production-db", "10.1.1.1")).unwrap();

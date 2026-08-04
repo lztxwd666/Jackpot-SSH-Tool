@@ -2,7 +2,6 @@
 //! 定期发送 SSH keepalive 请求以保持连接活跃并检测死连接
 //! 检测到死连接时自动触发 Session 断开
 
-use core_common::CoreResult;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,10 +28,7 @@ pub fn spawn_keepalive(session: Arc<Session>, interval_secs: u64) -> tokio::task
             }
 
             let session_clone = session.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                session_clone.send_keepalive()
-            })
-            .await;
+            let result = tokio::task::spawn_blocking(move || session_clone.send_keepalive()).await;
 
             match result {
                 Ok(Ok(())) => {
@@ -53,10 +49,4 @@ pub fn spawn_keepalive(session: Arc<Session>, interval_secs: u64) -> tokio::task
 
         tracing::debug!(session_id = %session.id, "keepalive task finished");
     })
-}
-
-/// 同步版本：发送单次 keepalive 请求（用于测试）
-#[allow(dead_code)]
-pub(crate) fn send_keepalive_once(session: &Session) -> CoreResult<()> {
-    session.send_keepalive()
 }

@@ -10,7 +10,7 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
 [workspace.dependencies]
@@ -24,3 +24,4 @@ thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
+sha2 = "0.10"

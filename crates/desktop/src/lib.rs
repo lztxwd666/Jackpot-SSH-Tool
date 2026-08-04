@@ -27,27 +27,38 @@ pub fn run() {
             let state = Arc::new(AppState {
                 runtime: tokio::sync::RwLock::new(Some(runtime)),
                 channels: tokio::sync::RwLock::new(HashMap::new()),
+                sftp_channels: tokio::sync::RwLock::new(HashMap::new()),
             });
             app.manage(state.clone());
 
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 // 启动 CoreRuntime（初始化数据库、迁移、Provider）
-                if let Some(ref rt) = *state.runtime.read().await {
-                    if let Err(e) = rt.start().await {
-                        tracing::error!(%e, "failed to start core runtime");
-                        return;
-                    }
+                if let Some(ref rt) = *state.runtime.read().await
+                    && let Err(e) = rt.start().await
+                {
+                    tracing::error!(%e, "failed to start core runtime");
+                    return;
                 }
 
                 // 事件转发循环：CoreRuntime → Tauri IPC → Vue 前端
-                while let Ok(event) = event_rx.recv().await {
-                    let payload = serde_json::to_string(&event).unwrap_or_else(|e| {
-                        tracing::error!(%e, "failed to serialize event");
-                        "{}".into()
-                    });
-                    if let Err(e) = app_handle.emit("core-event", payload) {
-                        tracing::error!(%e, "failed to emit core-event");
+                loop {
+                    match event_rx.recv().await {
+                        Ok(event) => {
+                            let payload = serde_json::to_string(&event).unwrap_or_else(|e| {
+                                tracing::error!(%e, "failed to serialize event");
+                                "{}".into()
+                            });
+                            if let Err(e) = app_handle.emit("core-event", payload) {
+                                tracing::error!(%e, "failed to emit core-event");
+                            }
+                        }
+                        // 接收者消费太慢导致事件被丢弃（如终端高吞吐输出）：记录告警
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(dropped = n, "core-event receiver lagged, events dropped");
+                        }
+                        // 通道关闭：退出转发循环
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
             });
@@ -57,10 +68,18 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_status,
             commands::ping,
+            commands::get_home_dir,
+            commands::read_local_dir,
+            commands::read_local_file,
+            commands::write_local_file,
+            commands::rename_local_file,
+            commands::delete_local_file,
+            commands::create_local_dir,
             commands::list_hosts,
             commands::save_host,
             commands::delete_host,
             commands::search_hosts,
+            commands::approve_host_key,
             commands::create_session,
             commands::connect_session,
             commands::open_shell,
@@ -68,6 +87,12 @@ pub fn run() {
             commands::terminal_send_input,
             commands::terminal_resize,
             commands::terminal_close,
+            commands::sftp_list_dir,
+            commands::sftp_create_dir,
+            commands::sftp_delete,
+            commands::sftp_rename,
+            commands::sftp_download_file,
+            commands::sftp_upload_file,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri application");

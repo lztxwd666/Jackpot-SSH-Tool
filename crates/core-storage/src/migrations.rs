@@ -7,9 +7,10 @@ use core_common::CoreResult;
 const SCHEMA_VERSION: i32 = 2;
 
 /// V1 初始 schema：hosts 表存储 SSH 主机信息，config 表存储键值对配置
+/// version 设为主键，防止重复执行迁移时插入重复版本行
 const MIGRATION_V1: &str = "
 CREATE TABLE IF NOT EXISTS _schema_version (
-    version INTEGER NOT NULL
+    version INTEGER PRIMARY KEY NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS hosts (
@@ -59,16 +60,22 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
     if current_version < 1 {
         conn.execute_batch(MIGRATION_V1)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
-        conn.execute("INSERT INTO _schema_version (version) VALUES (?1)", [1])
-            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
+            [1],
+        )
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tracing::info!("database migrated to version 1");
     }
 
     if current_version < 2 {
         conn.execute_batch(MIGRATION_V2)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
-        conn.execute("INSERT INTO _schema_version (version) VALUES (?1)", [SCHEMA_VERSION])
-            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
+            [SCHEMA_VERSION],
+        )
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tracing::info!("database migrated to version 2");
     }
 

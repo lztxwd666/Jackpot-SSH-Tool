@@ -5,13 +5,13 @@
 use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider, SessionId, SessionState};
 use core_event::event::{CoreEvent, SessionEvent};
 use core_event::EventDispatcher;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use crate::channel::Channel;
 
 /// SSH 交互 Session，用于一个逻辑会话的完整生命周期管理
 /// 内部使用 Mutex/RwLock 提供内部可变性，所有公开方法接收 &self
+/// state 使用 std::sync::RwLock 以兼容 async 和 blocking 两种调用上下文
 pub struct Session {
     pub id: SessionId,
     state: RwLock<SessionState>,
@@ -42,13 +42,13 @@ impl Session {
 
     /// 设置 KnownHostsProvider，用于后续连接时的主机密钥验证
     pub fn set_known_hosts(&self, known_hosts: Arc<dyn KnownHostsProvider>) {
-        let mut guard = self.known_hosts.blocking_write();
+        let mut guard = crate::rw_write(&self.known_hosts);
         *guard = Some(known_hosts);
     }
 
     /// 获取当前 KnownHostsProvider 的克隆引用
     pub fn get_known_hosts(&self) -> Option<Arc<dyn KnownHostsProvider>> {
-        self.known_hosts.blocking_read().clone()
+        crate::rw_read(&self.known_hosts).clone()
     }
 
     /// 使用指定的配置和已知主机信息建立 SSH 连接
@@ -60,7 +60,7 @@ impl Session {
         known_hosts: Option<Arc<dyn KnownHostsProvider>>,
     ) -> CoreResult<()> {
         {
-            let state = self.state.blocking_read();
+            let state = crate::rw_read(&self.state);
             if *state == SessionState::Closed {
                 return Err(core_common::CoreError::Internal(
                     "session is closed, cannot connect".into(),
@@ -78,25 +78,26 @@ impl Session {
         }
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = crate::rw_write(&self.state);
             *state = SessionState::Connecting;
         }
 
         let host = config.host.clone();
         let port = config.port;
 
-        self.dispatcher.dispatch(CoreEvent::Session(SessionEvent::Connecting {
-            session_id: self.id,
-            host: host.clone(),
-            port,
-        }));
+        self.dispatcher
+            .dispatch(CoreEvent::Session(SessionEvent::Connecting {
+                session_id: self.id,
+                host: host.clone(),
+                port,
+            }));
 
         if let Some(ref kh) = known_hosts {
-            let mut guard = self.known_hosts.blocking_write();
+            let mut guard = crate::rw_write(&self.known_hosts);
             *guard = Some(kh.clone());
         }
 
-        let kh_for_connect = self.known_hosts.blocking_read().clone();
+        let kh_for_connect = crate::rw_read(&self.known_hosts).clone();
         let mut conn =
             crate::ssh::SshConnection::new(config, self.dispatcher.clone(), kh_for_connect);
 
@@ -108,13 +109,14 @@ impl Session {
         *guard = Some(conn);
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = crate::rw_write(&self.state);
             *state = SessionState::Connected;
         }
 
-        self.dispatcher.dispatch(CoreEvent::Session(SessionEvent::Connected {
-            session_id: self.id,
-        }));
+        self.dispatcher
+            .dispatch(CoreEvent::Session(SessionEvent::Connected {
+                session_id: self.id,
+            }));
 
         tracing::info!(session_id = %self.id, host = %host, "session connected");
         Ok(())
@@ -133,13 +135,14 @@ impl Session {
         }
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = crate::rw_write(&self.state);
             *state = SessionState::Disconnected;
         }
 
-        self.dispatcher.dispatch(CoreEvent::Session(SessionEvent::Disconnected {
-            session_id: self.id,
-        }));
+        self.dispatcher
+            .dispatch(CoreEvent::Session(SessionEvent::Disconnected {
+                session_id: self.id,
+            }));
 
         tracing::info!(session_id = %self.id, "session disconnected");
         Ok(())
@@ -158,13 +161,14 @@ impl Session {
         }
 
         {
-            let mut state = self.state.blocking_write();
+            let mut state = crate::rw_write(&self.state);
             *state = SessionState::Closed;
         }
 
-        self.dispatcher.dispatch(CoreEvent::Session(SessionEvent::Closed {
-            session_id: self.id,
-        }));
+        self.dispatcher
+            .dispatch(CoreEvent::Session(SessionEvent::Closed {
+                session_id: self.id,
+            }));
 
         tracing::info!(session_id = %self.id, "session closed permanently");
         Ok(())
@@ -172,17 +176,17 @@ impl Session {
 
     /// 获取当前 Session 状态
     pub fn state(&self) -> SessionState {
-        *self.state.blocking_read()
+        *crate::rw_read(&self.state)
     }
 
     /// 检查 Session 是否已连接
     pub fn is_connected(&self) -> bool {
-        *self.state.blocking_read() == SessionState::Connected
+        *crate::rw_read(&self.state) == SessionState::Connected
     }
 
     /// 检查 Session 是否处于 Disconnected 状态（可重连）
     pub fn is_disconnected(&self) -> bool {
-        *self.state.blocking_read() == SessionState::Disconnected
+        *crate::rw_read(&self.state) == SessionState::Disconnected
     }
 
     /// 获取事件分发器的引用
@@ -192,41 +196,32 @@ impl Session {
 
     /// 打开一个 Shell 通道
     pub fn open_shell(&self) -> CoreResult<Arc<Channel>> {
-        let guard = self.connection.lock().map_err(|e| {
-            core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
-        })?;
-        let conn = guard
-            .as_ref()
-            .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
-        let ssh_session = conn.session().ok_or_else(|| {
-            core_common::CoreError::Internal("ssh session not available".into())
-        })?;
-
-        let channel =
-            Channel::open_shell(self.id, ssh_session, self.dispatcher.clone())?;
-
-        let mut channels = self.channels.blocking_write();
-        channels.push(channel.clone());
-
-        Ok(channel)
+        self.open_channel(Channel::open_shell)
     }
 
     /// 打开一个 SFTP 通道
     pub fn open_sftp(&self) -> CoreResult<Arc<Channel>> {
+        self.open_channel(Channel::open_sftp)
+    }
+
+    /// 通用的通道打开方法，封装连接锁和验证逻辑
+    fn open_channel<F>(&self, factory: F) -> CoreResult<Arc<Channel>>
+    where
+        F: FnOnce(SessionId, &ssh2::Session, Arc<dyn EventDispatcher>) -> CoreResult<Arc<Channel>>,
+    {
         let guard = self.connection.lock().map_err(|e| {
             core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
         })?;
         let conn = guard
             .as_ref()
             .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
-        let ssh_session = conn.session().ok_or_else(|| {
-            core_common::CoreError::Internal("ssh session not available".into())
-        })?;
+        let ssh_session = conn
+            .session()
+            .ok_or_else(|| core_common::CoreError::Internal("ssh session not available".into()))?;
 
-        let channel =
-            Channel::open_sftp(self.id, ssh_session, self.dispatcher.clone())?;
+        let channel = factory(self.id, ssh_session, self.dispatcher.clone())?;
 
-        let mut channels = self.channels.blocking_write();
+        let mut channels = crate::rw_write(&self.channels);
         channels.push(channel.clone());
 
         Ok(channel)
@@ -234,7 +229,26 @@ impl Session {
 
     /// 获取当前所有通道的快照
     pub fn channels(&self) -> Vec<Arc<Channel>> {
-        self.channels.blocking_read().clone()
+        crate::rw_read(&self.channels).clone()
+    }
+
+    /// 计算远程文件的 SHA-256 校验和（通过 exec sha256sum）
+    pub fn remote_sha256(&self, path: &str) -> CoreResult<String> {
+        let guard = self.connection.lock().map_err(|e| {
+            core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
+        })?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
+        // POSIX 单引号转义，防止路径中的特殊字符
+        let escaped = path.replace('\'', "'\\''");
+        let out = conn.exec_command(&format!("sha256sum '{}'", escaped))?;
+        // 输出格式: "<hash>  <path>"
+        let hash = out
+            .split_whitespace()
+            .next()
+            .ok_or_else(|| core_common::CoreError::Internal("empty sha256sum output".into()))?;
+        Ok(hash.to_string())
     }
 
     /// 发送 SSH keepalive 请求，检测连接是否存活
@@ -245,9 +259,9 @@ impl Session {
         let conn = guard
             .as_ref()
             .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
-        let session = conn.session().ok_or_else(|| {
-            core_common::CoreError::Internal("ssh session not available".into())
-        })?;
+        let session = conn
+            .session()
+            .ok_or_else(|| core_common::CoreError::Internal("ssh session not available".into()))?;
 
         session
             .keepalive_send()
@@ -257,16 +271,31 @@ impl Session {
     }
 
     /// 设置 Session 状态（供 keepalive/reconnect 模块内部使用）
+    /// 守卫：Closed 是终态，不允许被其他状态覆盖（防止重连任务"复活"已关闭的会话）
     pub(crate) fn set_state(&self, new_state: SessionState) {
-        let mut state = self.state.blocking_write();
+        let mut state = crate::rw_write(&self.state);
+        if *state == SessionState::Closed && new_state != SessionState::Closed {
+            tracing::warn!(
+                session_id = %self.id,
+                ?new_state,
+                "ignored state transition: session is closed (terminal state)"
+            );
+            return;
+        }
         *state = new_state;
     }
 
     /// 关闭所有通道并从通道列表中清除
+    /// 先取出列表再释放锁，避免在持有 channels 写锁期间执行阻塞的 close()
     fn close_all_channels(&self) {
-        let mut channels = self.channels.blocking_write();
-        for channel in channels.drain(..) {
-            let _ = channel.close();
+        let to_close = {
+            let mut channels = crate::rw_write(&self.channels);
+            channels.drain(..).collect::<Vec<_>>()
+        };
+        for channel in to_close {
+            if let Err(e) = channel.close() {
+                tracing::warn!(channel_id = %channel.id, error = %e, "failed to close channel");
+            }
         }
     }
 }

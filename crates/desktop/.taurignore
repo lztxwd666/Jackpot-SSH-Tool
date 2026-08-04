@@ -1,0 +1,5 @@
+# Tauri dev watcher 忽略规则（gitignore 语法）
+# 避免 vite 的缓存/临时文件写入触发应用重建（UI 弹出两次）
+ui/node_modules/
+ui/dist/
+ui/.vite-temp/
