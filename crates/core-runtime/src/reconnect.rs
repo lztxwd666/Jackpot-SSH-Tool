@@ -90,8 +90,7 @@ where
                                 error = %e,
                                 "reconnect attempt failed"
                             );
-                            // 重置状态为 Disconnected 以便下次重试（set_state 内部守卫 Closed 终态）
-                            session.set_state(SessionState::Disconnected);
+                            // 状态由 worker 内部 connect_inner 失败时回写 Disconnected，此处无需额外设置
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -100,7 +99,6 @@ where
                                 error = %e,
                                 "reconnect spawn_blocking join failed"
                             );
-                            session.set_state(SessionState::Disconnected);
                         }
                     }
                 }
@@ -111,7 +109,7 @@ where
                         error = %e,
                         "failed to get config for reconnect"
                     );
-                    session.set_state(SessionState::Disconnected);
+                    // 状态由 worker 内部 connect_inner 失败时回写 Disconnected，此处无需额外设置
                 }
             }
         }

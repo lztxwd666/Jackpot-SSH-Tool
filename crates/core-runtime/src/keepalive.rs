@@ -27,24 +27,9 @@ pub fn spawn_keepalive(session: Arc<Session>, interval_secs: u64) -> tokio::task
                 break;
             }
 
-            let session_clone = session.clone();
-            let result = tokio::task::spawn_blocking(move || session_clone.send_keepalive()).await;
-
-            match result {
-                Ok(Ok(())) => {
-                    tracing::trace!(session_id = %session.id, "keepalive ok");
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(session_id = %session.id, error = %e, "keepalive failed, disconnecting session");
-                    let _ = session.disconnect();
-                    break;
-                }
-                Err(e) => {
-                    tracing::warn!(session_id = %session.id, error = %e, "spawn_blocking join error in keepalive");
-                    let _ = session.disconnect();
-                    break;
-                }
-            }
+            // Task 4 将 keepalive 迁移至 worker 内部（通过 do_idle_work 发送）
+            // 本任务仅保留循环骨架，不做实际 SSH I/O
+            tracing::trace!(session_id = %session.id, "keepalive tick (stub, Task 4 will implement)");
         }
 
         tracing::debug!(session_id = %session.id, "keepalive task finished");

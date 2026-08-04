@@ -4,9 +4,16 @@
 
 #![allow(dead_code)]
 
-use core_common::{ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry, KnownHostsProvider};
+use core_common::{
+    ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry, KnownHostsProvider,
+    SessionId, SessionState,
+};
+use core_event::event::{CoreEvent, SessionEvent};
 use core_event::EventDispatcher;
+use crate::ssh::SshConnection;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::oneshot;
 
 /// worker 空闲工作间隔（毫秒）：shell 读轮询与命令响应延迟的上限
@@ -116,10 +123,11 @@ impl WorkerHandle {
 /// state 与 Session 共享（外部查询状态）；重连所需配置由命令携带（后续任务扩展）
 pub(crate) fn run_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>,
-    state: Arc<std::sync::RwLock<core_common::SessionState>>,
+    state: Arc<std::sync::RwLock<SessionState>>,
     dispatcher: Arc<dyn EventDispatcher>,
+    session_id: SessionId,
 ) {
-    let mut w = Worker::new(state, dispatcher);
+    let mut w = Worker::new(state, dispatcher, session_id);
     loop {
         // 处理所有已到达的命令（传输执行中会嵌套处理，见 Task 5）
         while let Ok(cmd) = rx.try_recv() {
@@ -134,29 +142,112 @@ pub(crate) fn run_loop(
 
 /// worker 内部状态：全部 ssh2 相关状态移入此处（无锁，单线程独占）
 struct Worker {
-    state: Arc<std::sync::RwLock<core_common::SessionState>>,
+    state: Arc<std::sync::RwLock<SessionState>>,
     dispatcher: Arc<dyn EventDispatcher>,
     closed: bool,
+    session_id: Option<SessionId>,   // run_loop 启动时注入
+    connection: Option<SshConnection>,    // ssh2 连接所有权（Task 2 引入）
+    last_keepalive: Option<Instant>,   // Task 4 使用
+    cancel: AtomicBool,        // Task 5 传输取消使用
 }
 
 impl Worker {
-    fn new(state: Arc<std::sync::RwLock<core_common::SessionState>>, dispatcher: Arc<dyn EventDispatcher>) -> Self {
-        Self { state, dispatcher, closed: false }
+    fn new(state: Arc<std::sync::RwLock<SessionState>>, dispatcher: Arc<dyn EventDispatcher>, session_id: SessionId) -> Self {
+        Self {
+            state, dispatcher, session_id: Some(session_id),
+            connection: None, last_keepalive: None,
+            closed: false, cancel: AtomicBool::new(false),
+        }
+    }
+
+    /// 写入状态，守卫 Closed 终态（Closed 状态下不允许被非 Closed 覆盖）
+    fn write_state(&self, s: SessionState) -> CoreResult<()> {
+        let mut guard = self.state.write().map_err(|e| CoreError::Internal(format!("state lock poisoned: {e}")))?;
+        if *guard == SessionState::Closed && s != SessionState::Closed {
+            return Err(CoreError::Internal("session is closed (terminal state)".into()));
+        }
+        *guard = s;
+        Ok(())
+    }
+
+    /// 分发事件（worker 内单线程，无需同步）
+    fn dispatch(&self, event: CoreEvent) {
+        self.dispatcher.dispatch(event);
+    }
+
+    /// 建立 SSH 连接（worker 内执行）
+    fn connect_inner(&mut self, config: ConnectionConfig, known_hosts: Option<Arc<dyn KnownHostsProvider>>) -> CoreResult<()> {
+        self.write_state(SessionState::Connecting)?;
+        let host = config.host.clone();
+        let port = config.port;
+        self.dispatch(CoreEvent::Session(SessionEvent::Connecting {
+            session_id: self.session_id(), host: host.clone(), port,
+        }));
+        let mut conn = SshConnection::new(config, self.dispatcher.clone(), known_hosts);
+        match conn.connect() {
+            Ok(()) => {
+                self.connection = Some(conn);
+                self.write_state(SessionState::Connected)?;
+                self.dispatch(CoreEvent::Session(SessionEvent::Connected { session_id: self.session_id() }));
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.write_state(SessionState::Disconnected);
+                Err(e)
+            }
+        }
+    }
+
+    /// 断开 SSH 连接（worker 内执行），状态转为 Disconnected（可重连）
+    fn disconnect_inner(&mut self) {
+        if let Some(mut conn) = self.connection.take() {
+            let _ = conn.disconnect();
+        }
+        if self.write_state(SessionState::Disconnected).is_ok() {
+            self.dispatch(CoreEvent::Session(SessionEvent::Disconnected { session_id: self.session_id() }));
+        }
+    }
+
+    /// 执行远程命令并返回 stdout（worker 内执行）
+    fn exec_inner(&self, command: &str) -> CoreResult<String> {
+        let conn = self.connection.as_ref()
+            .ok_or_else(|| CoreError::Internal("no active connection".into()))?;
+        conn.exec_command(command)
+    }
+
+    /// 获取当前 worker 绑定的 session_id（构造时注入，始终有值）
+    fn session_id(&self) -> SessionId {
+        self.session_id.unwrap()
     }
 
     /// 处理单条命令；返回 false 表示应结束线程
-    /// 骨架阶段：所有带回执的命令回执 Err("not implemented")，保证调用方不挂起；
-    /// 后续任务逐个替换为真实现
+    /// 已实现：Connect / Disconnect / Close / Exec
+    /// 其余命令后续任务逐个替换为真实现
     fn handle(&mut self, cmd: WorkerCommand) -> bool {
         match cmd {
-            WorkerCommand::Connect { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
-            WorkerCommand::Disconnect => {}
-            WorkerCommand::Close => { self.closed = true; return false; }
+            WorkerCommand::Connect { config, known_hosts, reply } => {
+                let r = self.connect_inner(config, known_hosts);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::Disconnect => {
+                self.disconnect_inner();
+            }
+            WorkerCommand::Close => {
+                self.disconnect_inner();
+                self.closed = true;
+                let _ = self.write_state(SessionState::Closed);
+                self.dispatch(CoreEvent::Session(SessionEvent::Closed { session_id: self.session_id() }));
+                return false; // 结束线程
+            }
+            WorkerCommand::Exec { command, reply } => {
+                let r = self.exec_inner(&command);
+                let _ = reply.send(r);
+            }
+            // 其余命令 Task 3-6 实现，先回执错误（保证调用方不挂起）
             WorkerCommand::OpenChannel { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::ChannelWrite { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::ChannelResize { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::ChannelClose { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
-            WorkerCommand::Exec { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpReadDir { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpCreateDir { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpRemove { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
@@ -175,7 +266,7 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core_common::SessionState;
+    use core_common::{ConnectionConfig, SessionId, SessionState};
     use core_event::LoggingDispatcher;
 
     fn spawn_test_worker() -> (Arc<WorkerHandle>, Arc<std::sync::RwLock<SessionState>>) {
@@ -183,7 +274,8 @@ mod tests {
         let state = Arc::new(std::sync::RwLock::new(SessionState::Created));
         let state_clone = state.clone();
         let dispatcher: Arc<dyn EventDispatcher> = Arc::new(LoggingDispatcher);
-        let join = std::thread::spawn(move || run_loop(rx, state_clone, dispatcher));
+        let session_id = SessionId::new();
+        let join = std::thread::spawn(move || run_loop(rx, state_clone, dispatcher, session_id));
         let handle = Arc::new(WorkerHandle::new(tx));
         handle.set_join(join);
         (handle, state)
@@ -209,5 +301,21 @@ mod tests {
         // 关闭命令后 worker 应退出（join 可完成）
         let join = handle.join.lock().unwrap().take().unwrap();
         join.join().expect("worker thread should exit after Close");
+    }
+
+    #[test]
+    fn test_connect_rejects_invalid_host() {
+        let (handle, state) = spawn_test_worker();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let config = ConnectionConfig::new(
+            "nonexistent.invalid".into(), "root".into(),
+            core_common::AuthMethod::Password("x".into()),
+        ).with_timeout(1); // 1 秒超时，测试不挂起
+        handle.send(WorkerCommand::Connect {
+            config, known_hosts: None, reply: reply_tx,
+        }).unwrap();
+        let result = reply_rx.blocking_recv().unwrap();
+        assert!(result.is_err(), "连接无效主机应返回错误");
+        assert_eq!(*state.read().unwrap(), SessionState::Disconnected);
     }
 }
