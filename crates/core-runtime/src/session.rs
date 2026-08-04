@@ -1,42 +1,77 @@
 //! Session 生命周期管理模块
 //! Session 是比 SshConnection 更高层的抽象，拥有连接和通道列表
 //! 支持断线重连，自身不持有 ConnectionConfig（由外部调用 connect 时传入）
+//! Stage 6: 每 Session 一个 worker 线程（Active Object 模式），SSH 操作经 mpsc 串行执行
 
-use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider, SessionId, SessionState};
-use core_event::event::{CoreEvent, SessionEvent};
+use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider, ReconnectPolicy, SessionId, SessionState};
 use core_event::EventDispatcher;
-use std::sync::{Arc, RwLock};
+use core_event::event::{CoreEvent, SessionEvent};
+use std::sync::Arc;
 
 use crate::channel::Channel;
+use crate::worker::{self, WorkerHandle};
+
+/// 不含任何凭据的连接配置骨架（重连用，Task 6 启用）
+pub struct HostConnectionProfile {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_kind: ProfileAuthKind,
+    pub timeout_secs: u64,
+}
+
+pub enum ProfileAuthKind {
+    Password,
+    PrivateKey { path: std::path::PathBuf, needs_passphrase: bool },
+}
 
 /// SSH 交互 Session，用于一个逻辑会话的完整生命周期管理
 /// 内部使用 Mutex/RwLock 提供内部可变性，所有公开方法接收 &self
 /// state 使用 std::sync::RwLock 以兼容 async 和 blocking 两种调用上下文
+/// Stage 6: 引入 worker 线程，所有 ssh2 操作经 WorkerHandle 投递到单线程串行执行
 pub struct Session {
     pub id: SessionId,
-    state: RwLock<SessionState>,
-    connection: std::sync::Mutex<Option<crate::ssh::SshConnection>>,
-    channels: RwLock<Vec<Arc<Channel>>>,
+    /// 与 worker 共享的状态（worker 单写者，外部只读）
+    state: Arc<std::sync::RwLock<SessionState>>,
+    /// worker 句柄：投递命令的唯一入口
+    worker: Arc<WorkerHandle>,
     dispatcher: Arc<dyn EventDispatcher>,
-    known_hosts: RwLock<Option<Arc<dyn KnownHostsProvider>>>,
+    known_hosts: std::sync::RwLock<Option<Arc<dyn KnownHostsProvider>>>,
+    #[allow(dead_code)]
+    host_config: std::sync::RwLock<Option<HostConnectionProfile>>,
+    reconnect_policy: std::sync::RwLock<Option<ReconnectPolicy>>,
+    // —— 以下旧字段由后续任务逐个移除（Task 2 删 connection，Task 3 删 channels）——
+    connection: std::sync::Mutex<Option<crate::ssh::SshConnection>>,
+    channels: std::sync::RwLock<Vec<Arc<Channel>>>,
 }
 
 impl Session {
-    /// 创建一个处于 Created 状态的新 Session
+    /// 创建一个处于 Created 状态的新 Session，同时启动 worker 线程
     pub fn new(dispatcher: Arc<dyn EventDispatcher>) -> Arc<Self> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let state = Arc::new(std::sync::RwLock::new(SessionState::Created));
         let session = Arc::new(Self {
             id: SessionId::new(),
-            state: RwLock::new(SessionState::Created),
-            connection: std::sync::Mutex::new(None),
-            channels: RwLock::new(Vec::new()),
+            state: state.clone(),
+            worker: Arc::new(WorkerHandle::new(tx)),
             dispatcher: dispatcher.clone(),
-            known_hosts: RwLock::new(None),
+            known_hosts: std::sync::RwLock::new(None),
+            host_config: std::sync::RwLock::new(None),
+            reconnect_policy: std::sync::RwLock::new(None),
+            connection: std::sync::Mutex::new(None),
+            channels: std::sync::RwLock::new(Vec::new()),
         });
 
-        dispatcher.dispatch(CoreEvent::Session(SessionEvent::Created {
-            session_id: session.id,
-        }));
+        // 启动 worker 线程（持 dispatcher 与共享状态；不持 Session 引用，避免循环引用）
+        let join = std::thread::spawn(move || {
+            worker::run_loop(rx, state, dispatcher);
+        });
+        session.worker.set_join(join);
 
+        session.dispatcher
+            .dispatch(CoreEvent::Session(SessionEvent::Created {
+                session_id: session.id,
+            }));
         session
     }
 
@@ -49,6 +84,36 @@ impl Session {
     /// 获取当前 KnownHostsProvider 的克隆引用
     pub fn get_known_hosts(&self) -> Option<Arc<dyn KnownHostsProvider>> {
         crate::rw_read(&self.known_hosts).clone()
+    }
+
+    /// 设置重连策略
+    pub fn set_reconnect_policy(&self, policy: ReconnectPolicy) {
+        *crate::rw_write(&self.reconnect_policy) = Some(policy);
+    }
+
+    /// 获取重连策略的克隆
+    pub fn reconnect_policy(&self) -> Option<ReconnectPolicy> {
+        crate::rw_read(&self.reconnect_policy).clone()
+    }
+
+    /// 保存连接配置骨架（剥离凭据），供重连使用
+    #[allow(dead_code)]
+    pub(crate) fn save_host_config(&self, config: &ConnectionConfig) {
+        let profile = HostConnectionProfile {
+            host: config.host.clone(),
+            port: config.port,
+            username: config.username.clone(),
+            auth_kind: match &config.auth_method {
+                core_common::AuthMethod::Password(_) => ProfileAuthKind::Password,
+                core_common::AuthMethod::PrivateKey { path, passphrase } => ProfileAuthKind::PrivateKey {
+                    path: path.clone(),
+                    needs_passphrase: passphrase.is_some(),
+                },
+                core_common::AuthMethod::Agent => ProfileAuthKind::Password,
+            },
+            timeout_secs: config.timeout_secs,
+        };
+        *crate::rw_write(&self.host_config) = Some(profile);
     }
 
     /// 使用指定的配置和已知主机信息建立 SSH 连接

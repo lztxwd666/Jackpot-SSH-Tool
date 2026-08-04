@@ -7,6 +7,7 @@ pub mod reconnect;
 pub mod runtime;
 pub mod session;
 pub mod ssh;
+pub mod worker;
 
 pub use channel::Channel;
 pub use keepalive::spawn_keepalive;
