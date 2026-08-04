@@ -113,7 +113,7 @@ impl WorkerHandle {
 }
 
 /// worker 主循环入口（std::thread）
-/// state 与 Session 共享（外部查询状态）；weak_session 用于重连时读取配置（后续任务）
+/// state 与 Session 共享（外部查询状态）；重连所需配置由命令携带（后续任务扩展）
 pub(crate) fn run_loop(
     mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>,
     state: Arc<std::sync::RwLock<core_common::SessionState>>,
