@@ -41,11 +41,6 @@ pub struct Session {
     #[allow(dead_code)]
     host_config: std::sync::RwLock<Option<HostConnectionProfile>>,
     reconnect_policy: std::sync::RwLock<Option<ReconnectPolicy>>,
-    // —— 以下旧字段由后续任务移除 ——
-    // connection: Task 3 迁移 open_channel 后与 channels 一起删除
-    // 当前仅 open_channel/open_shell/open_sftp 通过此字段访问（connect 已走 worker）
-    connection: std::sync::Mutex<Option<crate::ssh::SshConnection>>,
-    channels: std::sync::RwLock<Vec<Arc<Channel>>>,
 }
 
 impl Session {
@@ -62,8 +57,6 @@ impl Session {
             known_hosts: std::sync::RwLock::new(None),
             host_config: std::sync::RwLock::new(None),
             reconnect_policy: std::sync::RwLock::new(None),
-            connection: std::sync::Mutex::new(None),
-            channels: std::sync::RwLock::new(Vec::new()),
         });
 
         // 启动 worker 线程（持 dispatcher 与共享状态；不持 Session 引用，避免循环引用）
@@ -175,42 +168,29 @@ impl Session {
         self.dispatcher.clone()
     }
 
-    /// 打开一个 Shell 通道
+    /// 打开一个 Shell 通道（投递 OpenChannel 命令到 worker，构造 Channel 句柄）
     pub fn open_shell(&self) -> CoreResult<Arc<Channel>> {
-        self.open_channel(Channel::open_shell)
+        self.open_channel(core_common::ChannelType::Shell)
     }
 
-    /// 打开一个 SFTP 通道
+    /// 打开一个 SFTP 通道（投递 OpenChannel 命令到 worker，构造 Channel 句柄）
     pub fn open_sftp(&self) -> CoreResult<Arc<Channel>> {
-        self.open_channel(Channel::open_sftp)
+        self.open_channel(core_common::ChannelType::Sftp)
     }
 
-    /// 通用的通道打开方法，封装连接锁和验证逻辑
-    fn open_channel<F>(&self, factory: F) -> CoreResult<Arc<Channel>>
-    where
-        F: FnOnce(SessionId, &ssh2::Session, Arc<dyn EventDispatcher>) -> CoreResult<Arc<Channel>>,
-    {
-        let guard = self.connection.lock().map_err(|e| {
-            core_common::CoreError::Internal(format!("lock connection mutex failed: {e}"))
-        })?;
-        let conn = guard
-            .as_ref()
-            .ok_or_else(|| core_common::CoreError::Internal("no active connection".into()))?;
-        let ssh_session = conn
-            .session()
-            .ok_or_else(|| core_common::CoreError::Internal("ssh session not available".into()))?;
-
-        let channel = factory(self.id, ssh_session, self.dispatcher.clone())?;
-
-        let mut channels = crate::rw_write(&self.channels);
-        channels.push(channel.clone());
-
-        Ok(channel)
+    /// 打开通道的通用方法：投递 OpenChannel 命令到 worker 并构造纯句柄 Channel
+    fn open_channel(&self, ctype: core_common::ChannelType) -> CoreResult<Arc<Channel>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let cid = self.worker.call(
+            WorkerCommand::OpenChannel { ctype, reply: reply_tx },
+            reply_rx,
+        )?;
+        Ok(Channel::new(cid, ctype, self.id, self.worker.clone()))
     }
 
-    /// 获取当前所有通道的快照
+    /// 获取当前所有通道的快照（通道注册表在 worker 内，对外快照由 desktop 维护）
     pub fn channels(&self) -> Vec<Arc<Channel>> {
-        crate::rw_read(&self.channels).clone()
+        Vec::new()
     }
 
     /// 计算远程文件的 SHA-256 校验和（通过 worker Exec sha256sum）
@@ -226,18 +206,8 @@ impl Session {
         Ok(hash.to_string())
     }
 
-    /// 关闭所有通道并从通道列表中清除
-    /// 先取出列表再释放锁，避免在持有 channels 写锁期间执行阻塞的 close()
-    #[allow(dead_code)]
-    fn close_all_channels(&self) {
-        let to_close = {
-            let mut channels = crate::rw_write(&self.channels);
-            channels.drain(..).collect::<Vec<_>>()
-        };
-        for channel in to_close {
-            if let Err(e) = channel.close() {
-                tracing::warn!(channel_id = %channel.id, error = %e, "failed to close channel");
-            }
-        }
+    /// 关闭所有通道（投递 CloseAllChannels 到 worker）
+    pub fn close_all_channels(&self) -> CoreResult<()> {
+        self.worker.send(WorkerCommand::CloseAllChannels)
     }
 }

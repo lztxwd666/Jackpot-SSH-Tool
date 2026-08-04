@@ -8,9 +8,12 @@ use core_common::{
     ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry, KnownHostsProvider,
     SessionId, SessionState,
 };
-use core_event::event::{CoreEvent, SessionEvent};
+use core_event::event::{ChannelEvent, CoreEvent, SessionEvent};
 use core_event::EventDispatcher;
+use crate::channel::{self, ChannelInner};
 use crate::ssh::SshConnection;
+use std::collections::HashMap;
+use std::io::Write;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -149,6 +152,8 @@ struct Worker {
     connection: Option<SshConnection>,    // ssh2 连接所有权（Task 2 引入）
     last_keepalive: Option<Instant>,   // Task 4 使用
     cancel: AtomicBool,        // Task 5 传输取消使用
+    raw_channels: HashMap<ChannelId, ChannelInner>,  // worker 内通道注册表
+    channels: Vec<ChannelId>,        // 已打开通道 ID 列表
 }
 
 impl Worker {
@@ -157,6 +162,8 @@ impl Worker {
             state, dispatcher, session_id: Some(session_id),
             connection: None, last_keepalive: None,
             closed: false, cancel: AtomicBool::new(false),
+            raw_channels: HashMap::new(),
+            channels: Vec::new(),
         }
     }
 
@@ -200,6 +207,7 @@ impl Worker {
 
     /// 断开 SSH 连接（worker 内执行），状态转为 Disconnected（可重连）
     fn disconnect_inner(&mut self) {
+        self.close_all_channels_inner();
         if let Some(mut conn) = self.connection.take() {
             let _ = conn.disconnect();
         }
@@ -217,7 +225,106 @@ impl Worker {
 
     /// 获取当前 worker 绑定的 session_id（构造时注入，始终有值）
     fn session_id(&self) -> SessionId {
-        self.session_id.unwrap()
+        self.session_id.expect("session_id always set at construction")
+    }
+
+    /// 打开通道（shell 或 sftp），返回 ChannelId
+    fn open_channel_inner(&mut self, ctype: ChannelType) -> CoreResult<ChannelId> {
+        let conn = self.connection.as_ref()
+            .ok_or_else(|| CoreError::Internal("no active connection".into()))?;
+        let ssh_session = conn.session()
+            .ok_or_else(|| CoreError::Internal("ssh session not available".into()))?;
+        let channel_id = ChannelId::new();
+        let sid = self.session_id();
+        let dispatcher = self.dispatcher.clone();
+        let inner = match ctype {
+            ChannelType::Shell => {
+                let ch = channel::open_shell_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
+                ChannelInner::Session(ch)
+            }
+            ChannelType::Sftp => {
+                let sftp = channel::open_sftp_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
+                ChannelInner::Sftp(sftp)
+            }
+        };
+        self.raw_channels.insert(channel_id, inner);
+        self.channels.push(channel_id);
+        self.dispatch(CoreEvent::Channel(ChannelEvent::Opened {
+            session_id: sid,
+            channel_id,
+        }));
+        Ok(channel_id)
+    }
+
+    /// 向通道写入数据（处理部分写入 + EAGAIN 重试）
+    fn channel_write_inner(&mut self, channel: ChannelId, data: &[u8]) -> CoreResult<()> {
+        let inner = self.raw_channels.get_mut(&channel)
+            .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
+        match inner {
+            ChannelInner::Session(ch) => {
+                let mut written = 0;
+                while written < data.len() {
+                    match ch.write(&data[written..]) {
+                        Ok(n) => written += n,
+                        Err(e) if crate::ssh::is_would_block(&e) => {
+                            std::thread::sleep(std::time::Duration::from_millis(2));
+                        }
+                        Err(e) => return Err(CoreError::Internal(format!("channel write failed: {e}"))),
+                    }
+                }
+                Ok(())
+            }
+            ChannelInner::Sftp(_) => Err(CoreError::Internal("write not supported on sftp channel".into())),
+        }
+    }
+
+    /// 调整 PTY 尺寸（EAGAIN 重试最多 20 次）
+    fn channel_resize_inner(&mut self, channel: ChannelId, cols: u32, rows: u32) -> CoreResult<()> {
+        let inner = self.raw_channels.get_mut(&channel)
+            .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
+        match inner {
+            ChannelInner::Session(ch) => {
+                let mut retries = 0;
+                loop {
+                    match ch.request_pty_size(cols, rows, Some(cols * 8), Some(rows * 16)) {
+                        Ok(()) => return Ok(()),
+                        Err(e) if crate::ssh::is_would_block(&e) && retries < 20 => {
+                            retries += 1;
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(e) => return Err(CoreError::Internal(format!("resize pty failed: {e}"))),
+                    }
+                }
+            }
+            ChannelInner::Sftp(_) => Err(CoreError::Internal("resize not supported on sftp channel".into())),
+        }
+    }
+
+    /// 关闭通道（清理 ssh2 资源并广播 Closed 事件）
+    fn channel_close_inner(&mut self, channel: ChannelId) -> CoreResult<()> {
+        if let Some(inner) = self.raw_channels.remove(&channel) {
+            match inner {
+                ChannelInner::Session(mut ch) => {
+                    let _ = ch.close();
+                    let _ = ch.wait_close();
+                }
+                ChannelInner::Sftp(_) => {}
+            }
+        }
+        self.channels.retain(|c| *c != channel);
+        self.dispatch(CoreEvent::Channel(ChannelEvent::Closed {
+            session_id: self.session_id(),
+            channel_id: channel,
+        }));
+        Ok(())
+    }
+
+    /// 关闭全部通道
+    fn close_all_channels_inner(&mut self) {
+        let ids: Vec<ChannelId> = self.channels.to_vec();
+        for cid in ids {
+            let _ = self.channel_close_inner(cid);
+        }
     }
 
     /// 处理单条命令；返回 false 表示应结束线程
@@ -243,18 +350,32 @@ impl Worker {
                 let r = self.exec_inner(&command);
                 let _ = reply.send(r);
             }
-            // 其余命令 Task 3-6 实现，先回执错误（保证调用方不挂起）
-            WorkerCommand::OpenChannel { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
-            WorkerCommand::ChannelWrite { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
-            WorkerCommand::ChannelResize { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
-            WorkerCommand::ChannelClose { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
+            WorkerCommand::OpenChannel { ctype, reply } => {
+                let r = self.open_channel_inner(ctype);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::ChannelWrite { channel, data, reply } => {
+                let r = self.channel_write_inner(channel, &data);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::ChannelResize { channel, cols, rows, reply } => {
+                let r = self.channel_resize_inner(channel, cols, rows);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::ChannelClose { channel, reply } => {
+                let r = self.channel_close_inner(channel);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::CloseAllChannels => {
+                self.close_all_channels_inner();
+            }
+            // 其余命令 Task 5-6 实现，先回执错误（保证调用方不挂起）
             WorkerCommand::SftpReadDir { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpCreateDir { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpRemove { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpRename { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::SftpTransfer { reply, .. } => { let _ = reply.send(Err(CoreError::Internal("command not implemented yet".into()))); }
             WorkerCommand::ProvideCredential { .. } => {}
-            WorkerCommand::CloseAllChannels => {}
         }
         !self.closed
     }
@@ -284,14 +405,31 @@ mod tests {
     #[test]
     fn test_worker_alive_after_spawn() {
         let (handle, _) = spawn_test_worker();
-        // 骨架阶段：未实现命令必须回执错误而非挂起（否则调用方 blocking_recv 无限等待）
+        // 未连接时开启通道必须回执"no active connection"错误（不可挂起）
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         handle.send(WorkerCommand::OpenChannel {
             ctype: core_common::ChannelType::Shell,
             reply: reply_tx,
         }).unwrap();
         let result = reply_rx.blocking_recv().expect("worker 必须回执，不允许挂起");
-        assert!(result.is_err(), "骨架阶段未实现命令应返回错误");
+        assert!(result.is_err(), "未连接时打开通道应返回错误");
+    }
+
+    #[test]
+    fn test_open_channel_without_connection_fails() {
+        let (handle, _) = spawn_test_worker();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        handle.send(WorkerCommand::OpenChannel {
+            ctype: core_common::ChannelType::Shell,
+            reply: reply_tx,
+        }).unwrap();
+        let result = reply_rx.blocking_recv().unwrap();
+        let err = result.expect_err("未连接时打开通道应返回错误");
+        assert!(
+            err.to_string().contains("no active connection"),
+            "错误消息应明确说明无连接，而非骨架阶段的 not implemented 兜底。实际消息: {}",
+            err,
+        );
     }
 
     #[test]
