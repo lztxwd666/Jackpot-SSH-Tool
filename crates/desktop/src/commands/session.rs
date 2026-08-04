@@ -3,13 +3,7 @@
 use super::AppState;
 use core_common::{ChannelId, ConnectionConfig, SessionId};
 use std::sync::Arc;
-use tauri::{Emitter, State};
-
-/// 终端读循环异常退出事件 payload
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TerminalError {
-    pub channel_id: String,
-}
+use tauri::State;
 
 /// 创建一个新的 SSH Session，返回 session_id
 #[tauri::command]
@@ -104,7 +98,7 @@ pub async fn open_shell(
         channels.insert(channel_id, channel.clone());
     }
 
-    // 读循环延迟到前端 Terminal 挂载后通过 start_terminal 触发
+    // 读循环由 worker do_idle_work 自动承担，无需显式启动
 
     // SFTP 通道即使失败也不影响 Shell 功能，只记录日志
     match sftp_result {
@@ -130,30 +124,15 @@ pub async fn open_shell(
 }
 
 
-/// 前端 Terminal 组件挂载完成后调用，启动数据读取
-/// 确保事件监听器就绪后才开始读 SSH 数据
+/// 前端 Terminal 组件挂载完成后调用
+/// worker 模型下读循环由 worker 空闲工作承担，此命令保留为兼容 no-op（Vue 侧无需改动）
 #[tauri::command]
 pub async fn start_terminal(
-    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     channel_id: String,
 ) -> Result<(), String> {
-    let cid = ChannelId::parse(&channel_id)?;
-
-    let channels = state.channels.read().await;
-    let channel = channels.get(&cid).ok_or("channel not found")?.clone();
-    drop(channels);
-
-    // 监督 read loop：任务异常退出时记录日志，避免终端静默冻结无感知
-    let handle = channel.start_read_loop();
-    let app2 = app.clone();
-    tokio::spawn(async move {
-        if let Err(e) = handle.await {
-            tracing::error!(%cid, error = %e, "terminal read loop panicked");
-            let _ = app2.emit("terminal-error", TerminalError { channel_id: cid.to_string() });
-        }
-    });
-    tracing::info!(%cid, "terminal read loop started");
+    let _ = ChannelId::parse(&channel_id)?;   // 仅校验参数格式
+    let _ = state;
     Ok(())
 }
 
