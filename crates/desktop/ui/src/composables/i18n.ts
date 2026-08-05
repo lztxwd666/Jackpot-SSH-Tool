@@ -100,6 +100,16 @@ const messages: Record<Locale, Record<string, string>> = {
     // 标签页
     'tab.disconnect': 'Disconnect',
     'tab.close': 'Close',
+    'tab.connecting': 'Connecting...',
+    'tab.disconnected': 'Disconnected: {reason}',
+    'tab.reconnecting': 'Reconnecting...',
+    'tab.reconnect': 'Reconnect',
+
+    // 状态栏
+    'status.running': 'Running',
+    'status.stopped': 'Stopped',
+    'status.unknown': 'Unknown',
+    'status.initializing': 'Initializing...',
 
     // Toast 提示
     'toast.downloadInProgress': 'Download already in progress',
@@ -120,6 +130,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.deleteFailed': 'Delete failed: {err}',
     'toast.notConnected': 'Not connected to any host',
     'toast.systemFileDrop': 'Please use the local file tree to upload files',
+    'toast.hostNotFound': 'Host not found',
   },
   zh: {
     // 通用按钮
@@ -197,6 +208,16 @@ const messages: Record<Locale, Record<string, string>> = {
     // 标签页
     'tab.disconnect': '断开连接',
     'tab.close': '关闭',
+    'tab.connecting': '正在连接...',
+    'tab.disconnected': '连接已断开：{reason}',
+    'tab.reconnecting': '正在重连...',
+    'tab.reconnect': '重连',
+
+    // 状态栏
+    'status.running': '运行中',
+    'status.stopped': '已停止',
+    'status.unknown': '未知',
+    'status.initializing': '初始化中...',
 
     // Toast 提示
     'toast.downloadInProgress': '该文件正在下载中',
@@ -217,6 +238,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.deleteFailed': '删除失败: {err}',
     'toast.notConnected': '尚未连接到任何主机',
     'toast.systemFileDrop': '请使用左侧本地文件树上传文件',
+    'toast.hostNotFound': '主机不存在',
   },
 }
 

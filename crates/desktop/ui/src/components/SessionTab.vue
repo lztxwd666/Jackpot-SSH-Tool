@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// 单会话标签工作区：终端 + 双文件树（状态条由 Task B3 完善）
+// 单会话标签工作区：终端 + 双文件树 + 状态条（断连显示原因 + 手动重连按钮）
 // 传输函数在 App.vue 统一实现（全局 TransferPanel），本组件仅转发事件并携带 tab 粒度的目录状态
 import { ref } from 'vue'
 import Terminal from './Terminal.vue'
@@ -14,14 +14,27 @@ export interface SessionTabState {
   channelId: string
   status: 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
   error?: string
+  // 传输进行中锁定远程文件树（按 tab 粒度，Task 7 从旧全局 remoteTreeLocked 迁移而来）
+  locked?: boolean
 }
 
-const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remoteRefreshKey: number }>()
+const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remoteRefreshKey: number; locked?: boolean }>()
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'reconnect'): void
   (e: 'download', remotePath: string, localDir?: string): void
   (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string): void
 }>()
+
+// 状态条文案：连接中 / 已断开（原因）/ 重连中；连接成功不显示状态条
+function statusText(tab: SessionTabState): string {
+  switch (tab.status) {
+    case 'connecting': return t('tab.connecting')
+    case 'disconnected': return t('tab.disconnected', { reason: tab.error || '' })
+    case 'reconnecting': return t('tab.reconnecting')
+    default: return ''
+  }
+}
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
 const localCurrentDir = ref('')
@@ -38,9 +51,16 @@ function uploadFromLocal(localPath: string) {
     <div class="terminal-wrapper">
       <div class="terminal-header">
         <span class="connection-info">{{ tab.hostName }}</span>
-        <button class="btn btn-danger" @click="emit('close')">{{ tab.status === 'connected' ? t('tab.disconnect') : t('tab.close') }}</button>
+        <div class="header-actions">
+          <!-- 断开时显示手动重连按钮（从不主动重连，仅提示状态） -->
+          <button v-if="tab.status === 'disconnected'" class="btn btn-primary" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
+          <button class="btn btn-danger" @click="emit('close')">{{ tab.status === 'connected' ? t('tab.disconnect') : t('tab.close') }}</button>
+        </div>
       </div>
-      <!-- 状态条：Task B3 实现（v-if="tab.status !== 'connected'"） -->
+      <!-- 状态条：连接中 / 已断开（原因）/ 重连中 -->
+      <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
+        {{ statusText(tab) }}
+      </div>
       <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
     </div>
     <div class="panel" style="width:180px; min-width:180px;">
@@ -55,6 +75,7 @@ function uploadFromLocal(localPath: string) {
       <RemoteFileTree
         :sessionId="tab.sessionId"
         :refreshKey="remoteRefreshKey"
+        :locked="locked"
         @download="(p: string) => emit('download', p, localCurrentDir)"
         @upload="(dir: string, p: string) => emit('upload', dir, p, localCurrentDir)"
         @current-dir="(p: string) => remoteCurrentDir = p"
@@ -68,7 +89,20 @@ function uploadFromLocal(localPath: string) {
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; }
+.header-actions { display: flex; gap: 0.4rem; }
+.status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; border-bottom: 1px solid var(--color-border); }
+.status-banner.connecting, .status-banner.reconnecting { background: rgba(210, 153, 34, 0.12); color: #d29922; }
+.status-banner.disconnected { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
 .panel { display: flex; flex-direction: column; overflow: hidden; }
+
+/* 本组件内按钮样式（App.vue scoped 样式不作用于此，Task 6 的 .btn-danger 同例） */
+.btn {
+  padding: 0.3rem 0.7rem; border: 1px solid var(--color-border); border-radius: 4px;
+  background: var(--color-background); color: var(--color-text); cursor: pointer; font-size: 0.8rem;
+}
+.btn:hover { background: var(--color-background-mute); }
+.btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
+.btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
 
 .btn-danger {
   padding: 0.3rem 0.7rem; border: 1px solid #e5534b; border-radius: 4px;

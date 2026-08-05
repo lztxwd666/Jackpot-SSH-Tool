@@ -19,12 +19,15 @@ interface PingResult {
 
 const hosts = ref<Host[]>([])
 const searchQuery = ref('')
-const status = ref('initializing...')
+const status = ref('initializing')
 
-// 双击直连状态：密码弹框（保存密码勾选由 Task B4 接线，暂无条件判断）
+// 双击直连/手动重连状态：密码弹框（Promise 化，确认 resolve 密码 / 取消 resolve null）
 const connecting = ref(false)
 const password = ref('')
 const showPasswordPrompt = ref(false)
+const promptHost = ref<Host | null>(null)
+// 密码弹框的 Promise resolver（同一时间最多一个挂起的弹框）
+let promptResolve: ((secret: string | null) => void) | null = null
 // 待确认主机密钥时的连接参数（确认后自动重连）
 const pendingConnectHost = ref<null | { host: Host; password: string }>(null)
 
@@ -121,7 +124,7 @@ function onSearch(q: string) {
   doSearch()
 }
 
-// 双击直连流程：复用密码弹框/主机密钥确认逻辑，改为创建/聚焦标签
+// 双击直连流程：密码认证走 Promise 化弹框，确认后执行直连（保存密码静默读取由 Task B4 接线）
 async function connectHost(host: Host) {
   // 防重入：连接进行中忽略新的双击
   if (connecting.value) return
@@ -129,10 +132,10 @@ async function connectHost(host: Host) {
   const existing = tabs.value.find(t => t.hostName === host.name && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return }
   if (host.auth_type === 'password') {
-    // 未保存密码：弹密码框，确认后执行直连（保存密码勾选由 Task B4 接线）
-    pendingConnectHost.value = { host, password: '' }
-    showPasswordPrompt.value = true
-    password.value = ''
+    // 弹密码框：确认拿到密码后直连，取消则不动作
+    const secret = await promptPassword(host)
+    if (secret == null) return
+    await doConnectWith(host, secret)
     return
   }
   await doConnectWith(host, null)
@@ -167,20 +170,81 @@ async function doConnectWith(host: Host, secret: string | null) {
   } finally { connecting.value = false }
 }
 
-// 密码弹框提交：携带密码执行直连
-async function submitPasswordConnect() {
-  const pc = pendingConnectHost.value
-  if (!pc) return
-  pendingConnectHost.value = null
-  showPasswordPrompt.value = false
-  await doConnectWith(pc.host, password.value)
+// 密码弹窗（Promise 化）：确认 → resolve 密码；取消 → resolve null
+function promptPassword(host: Host): Promise<string | null> {
+  return new Promise((resolve) => {
+    // 并发守卫：已有密码弹窗时立即取消（避免旧 Promise 永久挂起）
+    if (promptResolve) { resolve(null); return }
+    promptResolve = resolve
+    promptHost.value = host
+    password.value = ''
+    showPasswordPrompt.value = true
+  })
 }
 
-function cancelConnect() {
+// 密码弹框确认：resolve 密码并关闭
+function submitPromptPassword() {
+  const r = promptResolve
+  if (!r) return
+  promptResolve = null
   showPasswordPrompt.value = false
+  r(password.value)
   password.value = ''
-  connecting.value = false
-  pendingConnectHost.value = null
+}
+
+// 密码弹框取消：resolve null（调用方不发起连接）
+function cancelPromptPassword() {
+  const r = promptResolve
+  if (!r) return
+  promptResolve = null
+  showPasswordPrompt.value = false
+  r(null)
+  password.value = ''
+}
+
+// 手动重连流程（用户主动操作；从不自动触发重连）
+// 复用同一 SessionId 重新 connect_session → open_shell，新通道 ID 触发 Terminal :key 重建
+async function reconnectTab(tab: SessionTabState) {
+  if (!tab.sessionId) return
+  tab.status = 'reconnecting'
+  const host = hosts.value.find(h => h.name === tab.hostName)
+  if (!host) {
+    // 主机已删除（正常删除流程会连带关闭标签，此处为防御兜底）
+    tab.status = 'disconnected'
+    tab.error = t('toast.hostNotFound')
+    return
+  }
+  let secret: string | null = null
+  if (host.auth_type === 'password') {
+    // 凭据保存（Task B4）后接线静默读取，本任务先直接弹密码框
+    secret = await promptPassword(host)
+    if (secret == null) {
+      // 用户取消：不发连接请求，恢复断连状态（原断开原因保留）
+      tab.status = 'disconnected'
+      return
+    }
+  }
+  connecting.value = true
+  try {
+    await invoke('connect_session', {
+      sessionId: tab.sessionId, host: host.address, port: host.port,
+      username: host.username, authType: host.auth_type,
+      password: secret, privateKeyPath: null, privateKeyPassphrase: null,
+    })
+    // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
+    password.value = ''
+    const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
+    // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
+    tab.channelId = cid
+    tab.status = 'connected'
+    tab.error = undefined
+  } catch (e) {
+    tab.status = 'disconnected'
+    tab.error = String(e)
+    showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
+  } finally {
+    connecting.value = false
+  }
 }
 
 // 主机密钥确认：Unknown（首次连接）/ Changed（密钥变更，可能 MITM）
@@ -357,15 +421,24 @@ onMounted(async () => {
     }
     // 会话级事件：按 session_id 路由到对应标签
     routeCoreEvent(event.payload, {
+      // onSession 完整状态机接线：Connecting / Connected / Disconnected
       onSession: (sid, kind, detail) => {
         const tab = tabs.value.find(t => t.sessionId === sid)
         if (!tab) return
-        if (kind === 'Connected') { tab.status = 'connected'; tab.error = undefined }
-        // Disconnected/Connecting 等状态：Task B3 完整接线（本任务先建骨架）
+        if (kind === 'Connecting') { tab.status = 'connecting' }
+        else if (kind === 'Connected') { tab.status = 'connected'; tab.error = undefined }
+        else if (kind === 'Disconnected') {
+          // 幂等：断开后跟 Close 可能重复广播 Disconnected，重复设置无副作用
+          tab.status = 'disconnected'
+          tab.error = detail.reason ?? 'unknown'
+        }
       },
-      // 传输锁定（Locked/Unlocked）按 tab 粒度接线由 Task B3 完成：
-      // 本任务传输函数已按 tab 的 sessionId 调用，进度面板保持全局
-      onTransfer: (_sid, _kind) => {},
+      // 传输锁（Locked/Unlocked）按 tab 粒度：传输期间锁定该标签远程文件树
+      onTransfer: (sid, kind) => {
+        const tab = tabs.value.find(t => t.sessionId === sid)
+        if (!tab) return
+        tab.locked = kind === 'Locked'
+      },
     })
   })
   // 传输进度事件（流式下载/上传）
@@ -407,15 +480,17 @@ onBeforeUnmount(() => {
             :tab="tab"
             :local-refresh-key="localRefresh[tab.sessionId] ?? 0"
             :remote-refresh-key="remoteRefresh[tab.sessionId] ?? 0"
+            :locked="tab.locked"
             @close="closeTab(tab.id)"
+            @reconnect="reconnectTab(tab)"
             @download="(p: string, dir?: string) => downloadFile(tab.sessionId, p, dir)"
             @upload="(dir: string, p: string, expectedDir?: string) => uploadFile(tab.sessionId, dir, p, expectedDir)"
           />
         </template>
       </div>
-      <!-- 状态栏：左侧区域底部，展示运行状态（后续会话信息由 Task B3 完善） -->
+      <!-- 状态栏：左侧区域底部，展示运行状态（文案走 i18n，M11 修复） -->
       <div class="status-bar">
-        <span class="status-badge">{{ status }}</span>
+        <span class="status-badge">{{ t('status.' + status) }}</span>
         <!-- 后续状态显示预留位 -->
       </div>
     </div>
@@ -466,16 +541,16 @@ onBeforeUnmount(() => {
     <!-- 传输进度面板（全局） -->
     <TransferPanel :transfers="transfers" />
 
-    <!-- 密码弹窗（双击直连密码认证） -->
-    <div v-if="showPasswordPrompt" class="modal-overlay" @click.self="cancelConnect">
+    <!-- 密码弹窗（双击直连/手动重连密码认证，Promise 化） -->
+    <div v-if="showPasswordPrompt" class="modal-overlay" @click.self="cancelPromptPassword">
       <div class="modal">
         <h3>{{ t('hosts.enterPassword') }}</h3>
-        <p>{{ t('hosts.connectingTo', { user: pendingConnectHost?.host.username || '', host: pendingConnectHost?.host.address || '' }) }}</p>
-        <form @submit.prevent="submitPasswordConnect">
+        <p>{{ t('hosts.connectingTo', { user: promptHost?.username || '', host: promptHost?.address || '' }) }}</p>
+        <form @submit.prevent="submitPromptPassword">
           <input v-model="password" type="password" :placeholder="t('hosts.passwordPlaceholder')" autofocus required />
           <div class="modal-actions">
             <button type="submit" class="btn btn-primary" :disabled="connecting">{{ connecting ? t('common.connecting') : t('common.connect') }}</button>
-            <button type="button" class="btn" @click="cancelConnect">{{ t('common.cancel') }}</button>
+            <button type="button" class="btn" @click="cancelPromptPassword">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>
