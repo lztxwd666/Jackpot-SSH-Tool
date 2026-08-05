@@ -21,13 +21,18 @@ const hosts = ref<Host[]>([])
 const searchQuery = ref('')
 const status = ref('initializing')
 
-// 双击直连/手动重连状态：密码弹框（Promise 化，确认 resolve 密码 / 取消 resolve null）
+// 双击直连/手动重连状态：密码弹框（Promise 化，确认 resolve 密码+保存勾选 / 取消 resolve null）
 const connecting = ref(false)
 const password = ref('')
 const showPasswordPrompt = ref(false)
 const promptHost = ref<Host | null>(null)
+// 密码弹框"保存此密码"勾选：确认时暂存，连接认证成功后落库凭据并更新 save_password 标志
+const savePasswordOnConnect = ref(false)
+const pendingSaveCredential = ref<{ host: Host; secret: string } | null>(null)
+// 密码弹框的结果：null = 取消；非 null = 确认（secret 为密码，save 为"保存此密码"勾选）
+type PasswordPromptResult = { secret: string; save: boolean } | null
 // 密码弹框的 Promise resolver（同一时间最多一个挂起的弹框）
-let promptResolve: ((secret: string | null) => void) | null = null
+let promptResolve: ((result: PasswordPromptResult) => void) | null = null
 // 待确认主机密钥时的连接参数（确认后自动重连/重连续跑）
 // reconnectTabId：手动重连场景携带标签上下文，密钥确认后更新现有标签而非新建
 const pendingConnectHost = ref<null | { host: Host; password: string; reconnectTabId?: string }>(null)
@@ -95,35 +100,38 @@ async function saveHostForm(form: HostForm) {
         updated_at: new Date().toISOString(),
       },
     })
-    // 凭据保存/清除（kind 随认证方式：password 或 passphrase）
-    const kind = form.auth_type === 'password' ? 'password' : 'passphrase'
     if (form.save_password && form.password) {
       // 勾选保存且输入了密码：保存（或覆盖）OS 凭据库中的凭据
+      const kind = form.auth_type === 'password' ? 'password' : 'passphrase'
       await invoke('save_credential', {
         host: form.address, port: form.port, username: form.username, kind,
         secret: form.password,
       })
     } else if (editingHost.value?.save_password && !form.save_password) {
-      // 取消勾选：删除已保存凭据（编辑前保存过才需要删除）
-      await invoke('delete_credential', {
-        host: form.address, port: form.port, username: form.username, kind,
-      })
+      // 取消勾选：双 kind 清理（password + passphrase），覆盖切换 auth_type 后旧 kind 遗留的凭据
+      // 命令幂等：未保存的 kind 返回成功，安全
+      for (const kind of ['password', 'passphrase']) {
+        await invoke('delete_credential', {
+          host: form.address, port: form.port, username: form.username, kind,
+        }).catch(() => {})
+      }
     }
     cancelPanel()
     await loadHosts()
   } catch (e) { console.error('Save failed:', e) }
 }
 
-// 主机删除：确认后删除主机，连带关闭该主机的标签与已保存凭据（password 认证主机）
+// 主机删除：确认后删除主机，连带关闭该主机的标签与已保存凭据
+// 双 kind 清理（password + passphrase）：覆盖私钥主机曾存口令等任意遗留场景
 async function onDeleteHost(host: Host) {
   const ok = await confirmDialog(t('hosts.deleteConfirm', { name: host.name }))
   if (!ok) return
   try {
     await invoke('delete_host', { id: host.id })
-    if (host.auth_type === 'password') {
-      // 连带清理已保存凭据（幂等：未保存也返回成功；失败不阻断删除流程）
+    // 连带清理已保存凭据（命令幂等：未保存的 kind 返回成功；失败不阻断删除流程）
+    for (const kind of ['password', 'passphrase']) {
       await invoke('delete_credential', {
-        host: host.address, port: host.port, username: host.username, kind: 'password',
+        host: host.address, port: host.port, username: host.username, kind,
       }).catch(() => {})
     }
     for (const tab of [...tabs.value]) {
@@ -164,8 +172,11 @@ async function connectHost(host: Host) {
     }
     if (secret == null) {
       // 弹密码框：确认拿到密码后直连，取消则不动作
-      secret = await promptPassword(host)
-      if (secret == null) return
+      const r = await promptPassword(host)
+      if (r == null) return
+      secret = r.secret
+      // 勾选"保存此密码"：暂存凭据，连接认证成功后落库
+      if (r.save) pendingSaveCredential.value = { host, secret: r.secret }
     }
   }
   await doConnectWith(host, secret)
@@ -186,6 +197,8 @@ async function doConnectWith(host: Host, secret: string | null) {
     // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
     password.value = ''
     pendingConnectHost.value = null
+    // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
+    await applyPendingCredential()
     const cid = await invoke('open_shell', { sessionId: sid }) as string
     openSessionTab(sid, host.name, cid)
   } catch (e) {
@@ -193,32 +206,34 @@ async function doConnectWith(host: Host, secret: string | null) {
     // 主机密钥场景由 HostKey 事件驱动确认弹窗：不重复报错、不在控制台记录指纹
     if (!isHostKeyError) {
       console.error('Connect failed:', e)
-      // 非主机密钥失败：清理待确认参数，避免陈旧状态
+      // 非主机密钥失败：清理待确认参数与待保存凭据，避免陈旧状态（认证未通过，密码无效不保存）
       pendingConnectHost.value = null
+      pendingSaveCredential.value = null
       showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
     }
   } finally { connecting.value = false }
 }
 
-// 密码弹窗（Promise 化）：确认 → resolve 密码；取消 → resolve null
-function promptPassword(host: Host): Promise<string | null> {
+// 密码弹窗（Promise 化）：确认 → resolve { secret, save }；取消 → resolve null
+function promptPassword(host: Host): Promise<PasswordPromptResult> {
   return new Promise((resolve) => {
     // 并发守卫：已有密码弹窗时立即取消（避免旧 Promise 永久挂起）
     if (promptResolve) { resolve(null); return }
     promptResolve = resolve
     promptHost.value = host
     password.value = ''
+    savePasswordOnConnect.value = false
     showPasswordPrompt.value = true
   })
 }
 
-// 密码弹框确认：resolve 密码并关闭
+// 密码弹框确认：resolve 密码与保存勾选并关闭
 function submitPromptPassword() {
   const r = promptResolve
   if (!r) return
   promptResolve = null
   showPasswordPrompt.value = false
-  r(password.value)
+  r({ secret: password.value, save: savePasswordOnConnect.value })
   password.value = ''
 }
 
@@ -230,6 +245,33 @@ function cancelPromptPassword() {
   showPasswordPrompt.value = false
   r(null)
   password.value = ''
+}
+
+// 弹框勾选"保存此密码"且连接认证成功后落库：
+// 先 save_credential 写入 OS 凭据库，再 save_host 更新 save_password 标志（下次连接走静默加载）
+// 只有认证通过（connect_session 成功）才消费；任一失败则不保存（标志不更新，行为可回退）
+async function applyPendingCredential() {
+  const pc = pendingSaveCredential.value
+  if (!pc) return
+  pendingSaveCredential.value = null
+  try {
+    await invoke('save_credential', {
+      host: pc.host.address, port: pc.host.port, username: pc.host.username,
+      kind: 'password', secret: pc.secret,
+    })
+    const updated: Host = { ...pc.host, save_password: true }
+    await invoke('save_host', {
+      host: {
+        id: updated.id, name: updated.name, address: updated.address, port: updated.port,
+        username: updated.username, auth_type: updated.auth_type, group_name: updated.group_name,
+        favorite: updated.favorite, notes: updated.notes, save_password: true,
+        created_at: updated.created_at, updated_at: new Date().toISOString(),
+      },
+    })
+    // 同步本地列表（编辑面板的勾选状态与双击直连的静默加载都依赖此字段）
+    const idx = hosts.value.findIndex(h => h.id === updated.id)
+    if (idx >= 0) hosts.value[idx] = updated
+  } catch (e) { console.error('Save credential failed:', e) }
 }
 
 // 手动重连流程（用户主动操作；从不自动触发重连）
@@ -253,12 +295,15 @@ async function reconnectTab(tab: SessionTabState) {
       }).catch(() => null) as string | null
     }
     if (secret == null) {
-      secret = await promptPassword(host)
-      if (secret == null) {
+      const r = await promptPassword(host)
+      if (r == null) {
         // 用户取消：不发连接请求，恢复断连状态（原断开原因保留）
         tab.status = 'disconnected'
         return
       }
+      secret = r.secret
+      // 勾选"保存此密码"：暂存凭据，连接认证成功后落库
+      if (r.save) pendingSaveCredential.value = { host, secret: r.secret }
     }
   }
   // 保存连接参数：主机密钥确认后自动重连需要（携带重连上下文，确认后更新现有标签）
@@ -279,6 +324,8 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
     // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
     password.value = ''
     pendingConnectHost.value = null
+    // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
+    await applyPendingCredential()
     const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
     // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
     tab.channelId = cid
@@ -290,6 +337,8 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
     // 不重复报错、不改状态（确认/拒绝后的终态由 handleHostKey 决定）
     if (!isHostKeyError) {
       pendingConnectHost.value = null
+      // 认证未通过：清理待保存凭据（密码无效不落库）
+      pendingSaveCredential.value = null
       tab.status = 'disconnected'
       tab.error = String(e)
       showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
@@ -612,6 +661,9 @@ onBeforeUnmount(() => {
         <p>{{ t('hosts.connectingTo', { user: promptHost?.username || '', host: promptHost?.address || '' }) }}</p>
         <form @submit.prevent="submitPromptPassword">
           <input v-model="password" type="password" :placeholder="t('hosts.passwordPlaceholder')" autofocus required />
+          <label class="modal-save-check">
+            <input v-model="savePasswordOnConnect" type="checkbox" /> {{ t('hosts.savePasswordOnConnect') }}
+          </label>
           <div class="modal-actions">
             <button type="submit" class="btn btn-primary" :disabled="connecting">{{ connecting ? t('common.connecting') : t('common.connect') }}</button>
             <button type="button" class="btn" @click="cancelPromptPassword">{{ t('common.cancel') }}</button>
@@ -657,6 +709,9 @@ onBeforeUnmount(() => {
 .modal h3 { color: var(--color-heading); margin-bottom: 0.5rem; }
 .modal p { color: var(--color-text); opacity: 0.7; font-size: 0.8rem; margin-bottom: 1rem; }
 .modal input { width: 100%; padding: 0.4rem; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-background-soft); color: var(--color-text); font-size: 0.85rem; margin-bottom: 0.8rem; box-sizing: border-box; }
+/* 密码弹框"保存此密码"勾选：checkbox 覆盖 modal input 的整行样式 */
+.modal .modal-save-check { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: var(--color-text); margin-bottom: 0.8rem; }
+.modal .modal-save-check input { width: auto; margin-bottom: 0; }
 .modal-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
 
 </style>

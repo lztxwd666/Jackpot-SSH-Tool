@@ -55,6 +55,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'hosts.passwordPlaceholder': 'Password',
     'hosts.newHost': 'New Host',
     'hosts.editHost': 'Edit Host',
+    'hosts.savePasswordOnConnect': 'Save this password',
 
     // 主机表单
     'form.name': 'Name',
@@ -171,6 +172,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'hosts.passwordPlaceholder': '密码',
     'hosts.newHost': '新建主机',
     'hosts.editHost': '编辑主机',
+    'hosts.savePasswordOnConnect': '保存此密码',
 
     // 主机表单
     'form.name': '名称',
