@@ -2,14 +2,12 @@
 //! 负责应用生命周期管理、组件注册和事件驱动架构的编排
 
 pub mod channel;
-pub mod reconnect;
 pub mod runtime;
 pub mod session;
 pub mod ssh;
 pub mod worker;
 
 pub use channel::Channel;
-pub use reconnect::spawn_reconnect;
 pub use runtime::CoreRuntime;
 pub use session::Session;
 

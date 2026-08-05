@@ -82,6 +82,7 @@ pub fn run() {
             commands::approve_host_key,
             commands::create_session,
             commands::connect_session,
+            commands::provide_reconnect_credential,
             commands::open_shell,
             commands::start_terminal,
             commands::terminal_send_input,

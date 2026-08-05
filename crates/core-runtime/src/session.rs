@@ -12,20 +12,6 @@ use tokio::sync::oneshot;
 use crate::channel::Channel;
 use crate::worker::{self, WorkerHandle, WorkerCommand};
 
-/// 不含任何凭据的连接配置骨架（重连用，Task 6 启用）
-pub struct HostConnectionProfile {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub auth_kind: ProfileAuthKind,
-    pub timeout_secs: u64,
-}
-
-pub enum ProfileAuthKind {
-    Password,
-    PrivateKey { path: std::path::PathBuf, needs_passphrase: bool },
-}
-
 /// SSH 交互 Session，用于一个逻辑会话的完整生命周期管理
 /// 内部使用 Mutex/RwLock 提供内部可变性，所有公开方法接收 &self
 /// state 使用 std::sync::RwLock 以兼容 async 和 blocking 两种调用上下文
@@ -38,8 +24,6 @@ pub struct Session {
     worker: Arc<WorkerHandle>,
     dispatcher: Arc<dyn EventDispatcher>,
     known_hosts: std::sync::RwLock<Option<Arc<dyn KnownHostsProvider>>>,
-    #[allow(dead_code)]
-    host_config: std::sync::RwLock<Option<HostConnectionProfile>>,
     reconnect_policy: std::sync::RwLock<Option<ReconnectPolicy>>,
 }
 
@@ -55,7 +39,6 @@ impl Session {
             worker: Arc::new(WorkerHandle::new(tx)),
             dispatcher: dispatcher.clone(),
             known_hosts: std::sync::RwLock::new(None),
-            host_config: std::sync::RwLock::new(None),
             reconnect_policy: std::sync::RwLock::new(None),
         });
 
@@ -85,8 +68,12 @@ impl Session {
     }
 
     /// 设置重连策略
+    /// 本地保留一份供外部查询（desktop 判断"未设置则设默认"），并投递命令同步 worker 侧副本
     pub fn set_reconnect_policy(&self, policy: ReconnectPolicy) {
-        *crate::rw_write(&self.reconnect_policy) = Some(policy);
+        *crate::rw_write(&self.reconnect_policy) = Some(policy.clone());
+        let _ = self
+            .worker
+            .send(WorkerCommand::SetReconnectPolicy { policy: Some(policy) });
     }
 
     /// 获取重连策略的克隆
@@ -94,29 +81,13 @@ impl Session {
         crate::rw_read(&self.reconnect_policy).clone()
     }
 
-    /// 保存连接配置骨架（剥离凭据），供重连使用
-    #[allow(dead_code)]
-    pub(crate) fn save_host_config(&self, config: &ConnectionConfig) {
-        let profile = HostConnectionProfile {
-            host: config.host.clone(),
-            port: config.port,
-            username: config.username.clone(),
-            auth_kind: match &config.auth_method {
-                core_common::AuthMethod::Password(_) => ProfileAuthKind::Password,
-                core_common::AuthMethod::PrivateKey { path, passphrase } => ProfileAuthKind::PrivateKey {
-                    path: path.clone(),
-                    needs_passphrase: passphrase.is_some(),
-                },
-                core_common::AuthMethod::Agent => ProfileAuthKind::Password,
-            },
-            timeout_secs: config.timeout_secs,
-        };
-        *crate::rw_write(&self.host_config) = Some(profile);
+    /// 向等待中的重连流程提供凭据（密码或私钥口令）
+    pub fn provide_credential(&self, secret: String) -> CoreResult<()> {
+        self.worker.send(WorkerCommand::ProvideCredential { secret })
     }
 
     /// 建立 SSH 连接（阻塞至完成；内部投递 Connect 命令并等待回执）
-    /// 注：profile 保存逻辑在 Task 6 迁移至 worker 内部（profile_from_config）；
-    /// 本任务的 save_host_config 为过渡实现，Task 6 时随 Session::host_config 字段一并移除
+    /// 重连用配置骨架（profile_from_config）由 worker 在 connect_inner 成功后自行保存
     pub fn connect(
         &self,
         config: ConnectionConfig,
@@ -131,7 +102,6 @@ impl Session {
         }
         let kh_for_connect = crate::rw_read(&self.known_hosts).clone();
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.save_host_config(&config);
         self.worker.call(
             WorkerCommand::Connect { config, known_hosts: kh_for_connect, reply: reply_tx },
             reply_rx,

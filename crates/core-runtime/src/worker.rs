@@ -7,16 +7,16 @@
 use crate::channel::{self, ChannelInner};
 use crate::ssh::SshConnection;
 use core_common::{
-    ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry, KnownHostsProvider,
-    SessionId, SessionState,
+    AuthMethod, ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry,
+    KnownHostsProvider, ReconnectPolicy, SessionId, SessionState,
 };
 use core_event::EventDispatcher;
-use core_event::event::{ChannelEvent, CoreEvent, SessionEvent, TransferDirection, TransferEvent};
+use core_event::event::{ChannelEvent, CoreEvent, CredentialEvent, SessionEvent, TransferDirection, TransferEvent};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
 
 /// worker 空闲工作间隔（毫秒）：shell 读轮询与命令响应延迟的上限
@@ -38,6 +38,72 @@ fn keepalive_due(
         None => false, // 从未发送：连接刚建立，首轮不立即发送
         Some(l) => now.duration_since(l) >= interval,
     }
+}
+
+/// 凭据等待超时：用户 60 秒内未提供凭据则放弃本轮，进入下一轮退避
+const CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 不含任何凭据的连接配置骨架（重连用，凭据由 ProvideCredential 补充）
+/// Task 6 从 Session 迁入 worker：worker 是重连状态机的唯一所有者
+#[derive(Clone)]
+pub(crate) struct HostConnectionProfile {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_kind: ProfileAuthKind,
+    pub timeout_secs: u64,
+}
+
+#[derive(Clone)]
+pub(crate) enum ProfileAuthKind {
+    Password,
+    PrivateKey {
+        path: std::path::PathBuf,
+        needs_passphrase: bool,
+    },
+}
+
+/// 重连状态机纯逻辑：给定当前轮次与策略，返回本轮的退避秒数；None 表示重试耗尽
+fn reconnect_delay(attempt: u32, policy: &ReconnectPolicy) -> Option<u64> {
+    if attempt > policy.max_retries {
+        return None;
+    }
+    Some(policy.delay_for(attempt))
+}
+
+/// 连接配置 → 重连用配置骨架（剥离凭据，凭据值绝不落盘）
+fn profile_from_config(config: &ConnectionConfig) -> HostConnectionProfile {
+    HostConnectionProfile {
+        host: config.host.clone(),
+        port: config.port,
+        username: config.username.clone(),
+        auth_kind: match &config.auth_method {
+            AuthMethod::Password(_) => ProfileAuthKind::Password,
+            AuthMethod::PrivateKey { path, passphrase } => ProfileAuthKind::PrivateKey {
+                path: path.clone(),
+                needs_passphrase: passphrase.is_some(),
+            },
+            AuthMethod::Agent => ProfileAuthKind::Password,
+        },
+        timeout_secs: config.timeout_secs,
+    }
+}
+
+/// 配置骨架 → 完整配置（凭据由 ProvideCredential 补充）
+fn profile_to_config(profile: &HostConnectionProfile) -> ConnectionConfig {
+    ConnectionConfig::new(
+        profile.host.clone(),
+        profile.username.clone(),
+        match &profile.auth_kind {
+            ProfileAuthKind::Password => AuthMethod::Password(String::new()), // 占位，凭据到达后替换
+            ProfileAuthKind::PrivateKey { path, .. } => AuthMethod::PrivateKey {
+                path: path.clone(),
+                passphrase: None, // 需要口令时由 ProvideCredential 注入
+            },
+        },
+    )
+    .with_port(profile.port)
+    .with_timeout(profile.timeout_secs)
 }
 
 /// 会话级命令（Active Object 的 Method Request）
@@ -101,7 +167,17 @@ pub(crate) enum WorkerCommand {
     ProvideCredential {
         secret: String,
     },
+    SetReconnectPolicy {
+        policy: Option<ReconnectPolicy>,
+    },
     CloseAllChannels,
+}
+
+/// 重连状态（worker 线程私有）
+enum ReconnectState {
+    Idle,
+    Backoff { attempt: u32, wake_at: Instant },
+    AwaitingCredential { attempt: u32, deadline: Instant },
 }
 
 /// 传输方向
@@ -182,6 +258,10 @@ struct Worker {
     channels: Vec<ChannelId>,          // 已打开通道 ID 列表
     rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>, // 命令队列（嵌套 try_recv 取命令）
     transferring: bool,                // 传输进行中：拒绝嵌套传输
+    reconnect: ReconnectState,         // 重连状态机（Task 6 引入）
+    reconnect_policy: Option<ReconnectPolicy>, // 由 Session::set_reconnect_policy 同步
+    host_config: Option<HostConnectionProfile>, // 重连用配置骨架（connect 成功时保存）
+    known_hosts: Option<Arc<dyn KnownHostsProvider>>, // 首次 connect 传入，重连复用
 }
 
 impl Worker {
@@ -203,6 +283,10 @@ impl Worker {
             channels: Vec::new(),
             rx,
             transferring: false,
+            reconnect: ReconnectState::Idle,
+            reconnect_policy: None,
+            host_config: None,
+            known_hosts: None,
         }
     }
 
@@ -232,6 +316,12 @@ impl Worker {
         config: ConnectionConfig,
         known_hosts: Option<Arc<dyn KnownHostsProvider>>,
     ) -> CoreResult<()> {
+        // 保存 known_hosts 供重连尝试复用（首次 connect 可能为 None，不覆盖已有值）
+        if known_hosts.is_some() {
+            self.known_hosts = known_hosts.clone();
+        }
+        // 配置骨架先行剥离（config 随后被移入 SshConnection）
+        let profile = profile_from_config(&config);
         self.write_state(SessionState::Connecting)?;
         let host = config.host.clone();
         let port = config.port;
@@ -246,6 +336,10 @@ impl Worker {
                 self.connection = Some(conn);
                 // 复位传输取消标志：上一次断开置位后，新连接上的传输不得被残留标志误取消
                 self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+                // 重置 keepalive 计时：新连接首轮不立即发送（keepalive_due(None,..) 为 false）
+                self.last_keepalive = None;
+                // 保存重连用配置骨架（凭据剥离；重连/凭据等待复用）
+                self.host_config = Some(profile);
                 self.write_state(SessionState::Connected)?;
                 self.dispatch(CoreEvent::Session(SessionEvent::Connected {
                     session_id: self.session_id(),
@@ -274,6 +368,152 @@ impl Worker {
                 session_id: self.session_id(),
             }));
         }
+    }
+
+    /// 安排重连：从第 1 次尝试进入退避状态
+    /// 内部检查重连策略与 Closed 终态；由 keepalive 失败分支触发
+    fn schedule_reconnect(&mut self) {
+        let Some(policy) = self.reconnect_policy.clone() else {
+            return; // 未设置策略：不重连
+        };
+        if self.closed {
+            return; // Closed 终态守卫
+        }
+        let delay = policy.delay_for(1);
+        self.reconnect = ReconnectState::Backoff {
+            attempt: 1,
+            wake_at: Instant::now() + Duration::from_secs(delay),
+        };
+    }
+
+    /// 空闲工作中推进重连状态机（Backoff 到点 → 重连尝试 / 凭据等待 → 超时处理）
+    fn advance_reconnect(&mut self) {
+        // Closed 终态守卫：会话已关闭立即中止
+        if self.closed {
+            return;
+        }
+        let Some(policy) = self.reconnect_policy.clone() else {
+            // 策略被移除（SetReconnectPolicy(None)）：取消进行中的重连
+            self.reconnect = ReconnectState::Idle;
+            return;
+        };
+        match &self.reconnect {
+            ReconnectState::Idle => {}
+            ReconnectState::Backoff { attempt, wake_at } => {
+                if Instant::now() < *wake_at {
+                    return; // 退避未到点
+                }
+                let attempt = *attempt;
+                self.dispatch(CoreEvent::Session(SessionEvent::Reconnecting {
+                    session_id: self.session_id(),
+                    attempt,
+                }));
+                // 重建配置骨架（worker 保存的 host_config）
+                let Some(profile) = self.host_config.clone() else {
+                    self.reconnect = ReconnectState::Idle;
+                    self.dispatch_reconnect_failed("no host config".into());
+                    return;
+                };
+                let needs_secret = matches!(
+                    &profile.auth_kind,
+                    ProfileAuthKind::Password
+                        | ProfileAuthKind::PrivateKey {
+                            needs_passphrase: true,
+                            ..
+                        }
+                );
+                if needs_secret {
+                    // 请求用户凭据（凭据值绝不出现在事件中）
+                    self.dispatch(CoreEvent::Credential(CredentialEvent::Required {
+                        session_id: self.session_id(),
+                        host: profile.host.clone(),
+                        username: profile.username.clone(),
+                        auth_kind: match &profile.auth_kind {
+                            ProfileAuthKind::Password => "password".to_string(),
+                            ProfileAuthKind::PrivateKey { .. } => {
+                                "private_key_passphrase".to_string()
+                            }
+                        },
+                    }));
+                    self.reconnect = ReconnectState::AwaitingCredential {
+                        attempt,
+                        deadline: Instant::now() + CREDENTIAL_TIMEOUT,
+                    };
+                    return;
+                }
+                self.try_connect_attempt(attempt, profile);
+            }
+            ReconnectState::AwaitingCredential { attempt, deadline } => {
+                if Instant::now() >= *deadline {
+                    // 超时：放弃本轮，进入下一轮退避
+                    let next = *attempt + 1;
+                    match reconnect_delay(next, &policy) {
+                        Some(secs) => {
+                            tracing::warn!(
+                                session_id = ?self.session_id(),
+                                attempt = next,
+                                "reconnect credential timeout, retrying"
+                            );
+                            self.reconnect = ReconnectState::Backoff {
+                                attempt: next,
+                                wake_at: Instant::now() + Duration::from_secs(secs),
+                            };
+                        }
+                        None => {
+                            self.reconnect = ReconnectState::Idle;
+                            self.dispatch_reconnect_failed("max retries exhausted".into());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 按配置骨架发起一次重连尝试（无凭据场景）
+    fn try_connect_attempt(&mut self, attempt: u32, profile: HostConnectionProfile) {
+        let config = profile_to_config(&profile);
+        self.reconnect_connect(attempt, config);
+    }
+
+    /// 执行一次重连连接尝试：成功广播 Reconnected；失败按策略退避或终止
+    /// 与 try_connect_attempt 的区别在于 config 由调用方（ProvideCredential）注入凭据
+    fn reconnect_connect(&mut self, attempt: u32, config: ConnectionConfig) {
+        match self.connect_inner(config, self.known_hosts.clone()) {
+            Ok(()) => {
+                self.reconnect = ReconnectState::Idle;
+                self.dispatch(CoreEvent::Session(SessionEvent::Reconnected {
+                    session_id: self.session_id(),
+                }));
+            }
+            Err(e) => {
+                tracing::warn!(session_id = ?self.session_id(), attempt, error = %e, "reconnect attempt failed");
+                let Some(policy) = self.reconnect_policy.clone() else {
+                    self.reconnect = ReconnectState::Idle;
+                    return;
+                };
+                let next = attempt + 1;
+                match reconnect_delay(next, &policy) {
+                    Some(secs) => {
+                        self.reconnect = ReconnectState::Backoff {
+                            attempt: next,
+                            wake_at: Instant::now() + Duration::from_secs(secs),
+                        };
+                    }
+                    None => {
+                        self.reconnect = ReconnectState::Idle;
+                        self.dispatch_reconnect_failed("max retries exhausted".into());
+                    }
+                }
+            }
+        }
+    }
+
+    /// 广播重连失败事件（重试耗尽或无配置骨架）
+    fn dispatch_reconnect_failed(&self, reason: String) {
+        self.dispatch(CoreEvent::Session(SessionEvent::ReconnectFailed {
+            session_id: self.session_id(),
+            reason,
+        }));
     }
 
     /// 执行远程命令并返回 stdout（worker 内执行）
@@ -765,15 +1005,42 @@ impl Worker {
                 let r = self.handle_transfer_inner(kind, &remote, &local, progress);
                 let _ = reply.send(r);
             }
-            WorkerCommand::ProvideCredential { .. } => {}
+            WorkerCommand::ProvideCredential { secret } => {
+                if let ReconnectState::AwaitingCredential { attempt, .. } = &self.reconnect {
+                    let attempt = *attempt;
+                    if let Some(profile) = self.host_config.clone() {
+                        // 凭据注入（仅当值被使用；骨架不含凭据值）
+                        let mut config = profile_to_config(&profile);
+                        config.auth_method = match &profile.auth_kind {
+                            ProfileAuthKind::Password => AuthMethod::Password(secret),
+                            ProfileAuthKind::PrivateKey { path, .. } => AuthMethod::PrivateKey {
+                                path: path.clone(),
+                                passphrase: Some(secret),
+                            },
+                        };
+                        self.reconnect_connect(attempt, config);
+                    } else {
+                        // 配置骨架缺失（未经历过成功连接）：终止等待
+                        self.reconnect = ReconnectState::Idle;
+                    }
+                }
+            }
+            WorkerCommand::SetReconnectPolicy { policy } => {
+                self.reconnect_policy = policy;
+            }
         }
         !self.closed
     }
 
-    /// 空闲工作：keepalive 发送与 shell 通道非阻塞轮询读
+    /// 空闲工作：重连状态机推进、keepalive 发送与 shell 通道非阻塞轮询读
     fn do_idle_work(&mut self) {
-        if self.closed || self.connection.is_none() {
-            return; // 未连接不工作
+        if self.closed {
+            return;
+        }
+        // 重连状态机推进（断开期间工作；连接中 Idle 无操作）
+        self.advance_reconnect();
+        if self.connection.is_none() {
+            return; // 未连接不发送 keepalive
         }
         // keepalive：传输进行中 worker 忙，此函数不会执行，语义天然正确
         if keepalive_due(
@@ -791,8 +1058,9 @@ impl Worker {
                     self.last_keepalive = Some(std::time::Instant::now());
                 }
                 Some(Err(e)) => {
-                    tracing::warn!(session_id = ?self.session_id(), error = %e, "keepalive failed, disconnecting");
+                    tracing::warn!(session_id = ?self.session_id(), error = %e, "keepalive failed, disconnecting and scheduling reconnect");
                     self.disconnect_inner();
+                    self.schedule_reconnect();
                     return;
                 }
                 None => {}
@@ -955,6 +1223,19 @@ mod tests {
         let result = reply_rx.blocking_recv().unwrap();
         assert!(result.is_err(), "连接无效主机应返回错误");
         assert_eq!(*state.read().unwrap(), SessionState::Disconnected);
+    }
+
+    #[test]
+    fn test_reconnect_delay_sequence() {
+        let p = core_common::ReconnectPolicy {
+            max_retries: 3,
+            base_delay_secs: 1,
+            max_delay_secs: 30,
+        };
+        assert_eq!(reconnect_delay(1, &p), Some(1));
+        assert_eq!(reconnect_delay(2, &p), Some(2));
+        assert_eq!(reconnect_delay(3, &p), Some(4));
+        assert_eq!(reconnect_delay(4, &p), None); // 超出 max_retries
     }
 
     #[test]

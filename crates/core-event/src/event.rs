@@ -16,6 +16,7 @@ pub enum CoreEvent {
     Session(SessionEvent),
     Channel(ChannelEvent),
     Transfer(TransferEvent),
+    Credential(CredentialEvent),
     Host(HostEvent),
 }
 
@@ -90,6 +91,8 @@ pub enum SessionEvent {
     Disconnected { session_id: SessionId },
     /// 正在第 attempt 次重连尝试
     Reconnecting { session_id: SessionId, attempt: u32 },
+    /// 重连成功（区别于首次连接的 Connected）
+    Reconnected { session_id: SessionId },
     /// 重连失败，已达最大重试次数
     ReconnectFailed {
         session_id: SessionId,
@@ -167,6 +170,21 @@ pub enum TransferEvent {
     },
 }
 
+/// 凭据交互事件（Credential 领域）
+/// 凭据值绝不出现在事件中，仅携带定位重连流程所需的最小信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail")]
+pub enum CredentialEvent {
+    /// 重连需要用户提供凭据（密码或私钥口令）
+    Required {
+        session_id: SessionId,
+        host: String,
+        username: String,
+        /// "password" | "private_key_passphrase"
+        auth_kind: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +253,36 @@ mod tests {
         assert!(matches!(
             parsed,
             CoreEvent::Transfer(TransferEvent::Unlocked { .. })
+        ));
+    }
+
+    #[test]
+    fn test_reconnected_roundtrip() {
+        let event = CoreEvent::Session(SessionEvent::Reconnected {
+            session_id: SessionId::new(),
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: CoreEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            CoreEvent::Session(SessionEvent::Reconnected { .. })
+        ));
+    }
+
+    #[test]
+    fn test_credential_required_roundtrip() {
+        let event = CoreEvent::Credential(CredentialEvent::Required {
+            session_id: SessionId::new(),
+            host: "example.com".into(),
+            username: "root".into(),
+            auth_kind: "password".into(),
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: CoreEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            CoreEvent::Credential(CredentialEvent::Required { auth_kind, .. })
+                if auth_kind == "password"
         ));
     }
 }

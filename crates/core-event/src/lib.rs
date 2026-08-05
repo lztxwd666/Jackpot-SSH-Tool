@@ -8,6 +8,6 @@ pub use dispatcher::{
     ChannelDispatcher, EventDispatcher, LoggingDispatcher, SharedEventDispatcher,
 };
 pub use event::{
-    ApplicationEvent, ChannelEvent, ConnectionEvent, CoreEvent, HostEvent, HostKeyEvent,
-    SessionEvent, TransferDirection, TransferEvent,
+    ApplicationEvent, ChannelEvent, ConnectionEvent, CoreEvent, CredentialEvent, HostEvent,
+    HostKeyEvent, SessionEvent, TransferDirection, TransferEvent,
 };
