@@ -340,6 +340,9 @@ impl Worker {
                 self.last_keepalive = None;
                 // 保存重连用配置骨架（凭据剥离；重连/凭据等待复用）
                 self.host_config = Some(profile);
+                // 连接成功（含重连与手动路径）即终止进行中的重连状态机：
+                // 防止 Backoff 等待中手动连接成功后，wake 到点又对活连接重复建连
+                self.reconnect = ReconnectState::Idle;
                 self.write_state(SessionState::Connected)?;
                 self.dispatch(CoreEvent::Session(SessionEvent::Connected {
                     session_id: self.session_id(),
@@ -379,7 +382,10 @@ impl Worker {
         if self.closed {
             return; // Closed 终态守卫
         }
-        let delay = policy.delay_for(1);
+        // max_retries = 0 表示不重连：复用 reconnect_delay 的耗尽判断（None 即不重试）
+        let Some(delay) = reconnect_delay(1, &policy) else {
+            return;
+        };
         self.reconnect = ReconnectState::Backoff {
             attempt: 1,
             wake_at: Instant::now() + Duration::from_secs(delay),
@@ -925,6 +931,8 @@ impl Worker {
                 let _ = reply.send(r);
             }
             WorkerCommand::Disconnect => {
+                // 手动断开不应继续自动重连（防御性语义）
+                self.reconnect = ReconnectState::Idle;
                 self.disconnect_inner();
             }
             WorkerCommand::Close => {
