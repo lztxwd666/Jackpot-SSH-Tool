@@ -85,6 +85,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'prompt.newName': 'New name:',
 
     // 重连交互
+    'reconnect.inProgress': 'Reconnecting...',
     'reconnect.passwordTitle': 'Reconnect: Enter Password',
     'reconnect.passphraseTitle': 'Reconnect: Enter Key Passphrase',
     'reconnect.connectingTo': 'Reconnecting to {user}@{host}',
@@ -169,6 +170,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'prompt.newName': '新名称：',
 
     // 重连交互
+    'reconnect.inProgress': '正在重连...',
     'reconnect.passwordTitle': '重连：请输入密码',
     'reconnect.passphraseTitle': '重连：请输入私钥口令',
     'reconnect.connectingTo': '正在重连到 {user}@{host}',

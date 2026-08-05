@@ -1000,10 +1000,21 @@ impl Worker {
     /// 传输期间嵌套到达的传输命令由 handle 内 transferring 检查拒绝（返回 busy）
     fn drain_nested_commands(&mut self) -> bool {
         let mut keep_running = true;
-        while let Ok(cmd) = self.rx.try_recv() {
-            if !self.handle(cmd) {
-                keep_running = false;
-                break;
+        loop {
+            match self.rx.try_recv() {
+                Ok(cmd) => {
+                    if !self.handle(cmd) {
+                        keep_running = false;
+                        break;
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break, // 队列已清空
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    // 所有 Sender 已丢弃（Session 被废弃且 Drop 未投递 Close 等场景）：
+                    // 结束线程，防止 worker 线程泄漏
+                    keep_running = false;
+                    break;
+                }
             }
         }
         keep_running
@@ -1337,6 +1348,16 @@ mod tests {
         // 关闭命令后 worker 应退出（join 可完成）
         let join = handle.join.lock().unwrap().take().unwrap();
         join.join().expect("worker thread should exit after Close");
+    }
+
+    #[test]
+    fn test_worker_exits_when_all_senders_dropped() {
+        // 所有 Sender 丢弃（无 Close 命令）：drain 的 Disconnected 分支必须结束线程，
+        // 防止废弃 Session 泄漏 worker 线程
+        let (handle, _) = spawn_test_worker();
+        let join = handle.join.lock().unwrap().take().unwrap();
+        drop(handle); // 丢弃唯一 Sender（WorkerHandle 持 tx）
+        join.join().expect("worker thread should exit when all senders dropped");
     }
 
     #[test]

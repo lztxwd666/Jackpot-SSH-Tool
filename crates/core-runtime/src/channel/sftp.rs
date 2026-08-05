@@ -1,7 +1,7 @@
 //! SFTP 操作子模块（Stage 6 Task 5：方法改投递命令到 worker 串行执行）
 //! 实际 SFTP 执行在 worker 线程内；本模块的 Channel 方法为同步投递 + 回执等待，
 //! 调用方须处于阻塞上下文（如 spawn_blocking）。旧"通道级锁 + EAGAIN 重试"
-//! 模型已删除：worker 单线程无锁，重试逻辑内聚在 worker（sftp_retry_worker）。
+//! 模型已删除：worker 单线程无锁，重试逻辑内聚在 worker（sftp_retry_io / io_retry）。
 
 use super::Channel;
 use core_common::{CoreResult, FileEntry};

@@ -13,7 +13,7 @@ use crate::channel::Channel;
 use crate::worker::{self, WorkerHandle, WorkerCommand};
 
 /// SSH 交互 Session，用于一个逻辑会话的完整生命周期管理
-/// 内部使用 Mutex/RwLock 提供内部可变性，所有公开方法接收 &self
+/// 内部使用 RwLock 提供内部可变性（状态/策略/known_hosts 的原子读），所有公开方法接收 &self
 /// state 使用 std::sync::RwLock 以兼容 async 和 blocking 两种调用上下文
 /// Stage 6: 引入 worker 线程，所有 ssh2 操作经 WorkerHandle 投递到单线程串行执行
 pub struct Session {
@@ -176,5 +176,14 @@ impl Session {
     /// 关闭所有通道（投递 CloseAllChannels 到 worker）
     pub fn close_all_channels(&self) -> CoreResult<()> {
         self.worker.send(WorkerCommand::CloseAllChannels)
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // 回收 worker 线程：Session 被废弃（如连接失败后未 close）时投递 Close，
+        // worker 完成清理后经 drain_nested_commands 的 Disconnected 分支自然退出。
+        // Session 不持 worker 的接收端，无循环引用；与 terminal_close 的重复 Close 幂等安全
+        let _ = self.worker.send(WorkerCommand::Close);
     }
 }

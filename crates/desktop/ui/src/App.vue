@@ -423,6 +423,7 @@ onBeforeUnmount(() => {
             </span>
             <button class="btn btn-danger" @click="disconnect">{{ t('common.disconnect') }}</button>
           </div>
+          <div v-if="reconnecting" class="reconnect-banner">{{ t('reconnect.inProgress') }}</div>
           <Terminal :channelId="channelId" :key="channelId" />
         </div>
       </template>
@@ -611,6 +612,10 @@ onBeforeUnmount(() => {
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-text); font-weight: 500; }
+.reconnect-banner {
+  padding: 0.3rem 0.8rem; font-size: 0.75rem; text-align: center;
+  background: rgba(210, 153, 34, 0.15); color: #d29922; flex-shrink: 0;
+}
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal { background: var(--color-background); border: 1px solid var(--color-border); border-radius: 8px; padding: 1.5rem; min-width: 300px; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
