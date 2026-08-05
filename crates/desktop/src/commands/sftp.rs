@@ -2,7 +2,7 @@
 //! 流式传输全程在 Rust 侧完成，避免大文件经 IPC 传输；
 //! 传输完成后执行 SHA-256 完整性校验
 
-use super::{get_sftp_channel, local::sha256_file, AppState};
+use super::{AppState, get_sftp_channel, local::sha256_file};
 use core_common::{FileEntry, SessionId};
 use std::sync::Arc;
 use tauri::{Emitter, State};
@@ -32,7 +32,6 @@ pub async fn sftp_list_dir(
         .map_err(|e| e.to_string())
 }
 
-
 /// 创建远程目录
 #[tauri::command]
 pub async fn sftp_create_dir(
@@ -47,7 +46,6 @@ pub async fn sftp_create_dir(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
-
 
 /// 删除远程文件或目录
 #[tauri::command]
@@ -71,7 +69,6 @@ pub async fn sftp_delete(
     .map_err(|e| e.to_string())
 }
 
-
 /// 重命名远程文件
 #[tauri::command]
 pub async fn sftp_rename(
@@ -87,7 +84,6 @@ pub async fn sftp_rename(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
-
 
 /// 校验路径位于期望目录内，且不含父目录跳转组件
 /// 在任何文件 IO 之前调用，防止路径穿越
@@ -141,7 +137,11 @@ pub async fn sftp_download_file(
                 last_emit = done;
                 let _ = app2.emit(
                     "transfer-progress",
-                    TransferProgress { id: tid.clone(), done, total },
+                    TransferProgress {
+                        id: tid.clone(),
+                        done,
+                        total,
+                    },
                 );
             }
         })
@@ -155,7 +155,10 @@ pub async fn sftp_download_file(
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
-    let session = rt_ref.get_session(&sid_verify).await.ok_or("session not found")?;
+    let session = rt_ref
+        .get_session(&sid_verify)
+        .await
+        .ok_or("session not found")?;
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {
@@ -176,13 +179,14 @@ pub async fn sftp_download_file(
             if !rh.eq_ignore_ascii_case(&local_hash) {
                 // 校验失败：删除不完整的本地文件并报错
                 let _ = std::fs::remove_file(&lp);
-                return Err(format!("checksum mismatch: remote {rh}, local {local_hash}"));
+                return Err(format!(
+                    "checksum mismatch: remote {rh}, local {local_hash}"
+                ));
             }
         }
     }
     Ok(done)
 }
-
 
 /// 流式上传：本地 → 远程，全程在 Rust 侧完成，避免大文件经 IPC 传输
 /// 完成后执行 SHA-256 完整性校验（远端 sha256sum vs 本地哈希）
@@ -216,7 +220,11 @@ pub async fn sftp_upload_file(
                 last_emit = done;
                 let _ = app2.emit(
                     "transfer-progress",
-                    TransferProgress { id: tid.clone(), done, total },
+                    TransferProgress {
+                        id: tid.clone(),
+                        done,
+                        total,
+                    },
                 );
             }
         })
@@ -230,7 +238,10 @@ pub async fn sftp_upload_file(
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
-    let session = rt_ref.get_session(&sid_verify).await.ok_or("session not found")?;
+    let session = rt_ref
+        .get_session(&sid_verify)
+        .await
+        .ok_or("session not found")?;
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {
@@ -251,10 +262,11 @@ pub async fn sftp_upload_file(
             if !rh.eq_ignore_ascii_case(&local_hash) {
                 // 校验失败：删除损坏的远端文件并报错
                 let _ = ch_verify.sftp_remove_file(&rp);
-                return Err(format!("checksum mismatch: remote {rh}, local {local_hash}"));
+                return Err(format!(
+                    "checksum mismatch: remote {rh}, local {local_hash}"
+                ));
             }
         }
     }
     Ok(done)
 }
-
