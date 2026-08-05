@@ -73,6 +73,14 @@ const messages: Record<Locale, Record<string, string>> = {
     'form.notes': 'Notes',
     'form.notesPlaceholder': 'Optional notes...',
     'form.favorite': 'Favorite',
+    'form.password': 'Password',
+    'form.passwordPlaceholder': 'Enter password',
+    'form.passphrase': 'Passphrase',
+    'form.showSecret': 'Show',
+    'form.hideSecret': 'Hide',
+    'form.savePassword': 'Save password',
+    'form.savePassphrase': 'Save passphrase',
+    'form.passwordSaved': 'Password saved (enter new to change)',
 
     // 主机密钥确认
     'hostkey.confirmTitle': 'Confirm Host Key',
@@ -181,6 +189,14 @@ const messages: Record<Locale, Record<string, string>> = {
     'form.notes': '备注',
     'form.notesPlaceholder': '可选备注...',
     'form.favorite': '收藏',
+    'form.password': '密码',
+    'form.passwordPlaceholder': '输入密码',
+    'form.passphrase': '口令',
+    'form.showSecret': '显示',
+    'form.hideSecret': '隐藏',
+    'form.savePassword': '保存密码',
+    'form.savePassphrase': '保存口令',
+    'form.passwordSaved': '密码已保存（更改请输入新密码）',
 
     // 主机密钥确认
     'hostkey.confirmTitle': '确认主机密钥',

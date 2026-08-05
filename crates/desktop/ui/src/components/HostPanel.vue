@@ -15,6 +15,7 @@ export interface Host {
   group_name: string
   favorite: boolean
   notes: string
+  save_password: boolean
   created_at: string
   updated_at: string
 }

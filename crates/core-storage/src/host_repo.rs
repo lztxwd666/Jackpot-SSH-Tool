@@ -23,6 +23,7 @@ impl SqliteHostRepository {
         })?;
         let host_id = HostId::from_uuid(uuid_val);
         let favorite_int: i32 = row.get(6)?;
+        let save_password_int: i32 = row.get(11)?;
         Ok(Host {
             id: host_id,
             name: row.get(1)?,
@@ -33,6 +34,7 @@ impl SqliteHostRepository {
             group_name: row.get(7)?,
             favorite: favorite_int != 0,
             notes: row.get(8)?,
+            save_password: save_password_int != 0,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
         })
@@ -43,7 +45,7 @@ impl HostRepository for SqliteHostRepository {
     fn list_all(&self) -> CoreResult<Vec<Host>> {
         self.db.execute(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at FROM hosts ORDER BY name")
+                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at, save_password FROM hosts ORDER BY name")
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
             let rows = stmt
@@ -63,7 +65,7 @@ impl HostRepository for SqliteHostRepository {
         let id_str = id.to_string();
         self.db.execute(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at FROM hosts WHERE id = ?1")
+                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at, save_password FROM hosts WHERE id = ?1")
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
             let mut rows = stmt
@@ -90,6 +92,7 @@ impl HostRepository for SqliteHostRepository {
         let group_name = host.group_name.clone();
         let favorite = if host.favorite { 1 } else { 0 };
         let notes = host.notes.clone();
+        let save_password = if host.save_password { 1 } else { 0 };
         let now = utc_now_iso8601();
         let created_at = if host.created_at.is_empty() {
             now.clone()
@@ -100,8 +103,8 @@ impl HostRepository for SqliteHostRepository {
 
         self.db.execute(move |conn| {
             conn.execute(
-                "INSERT OR REPLACE INTO hosts (id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                rusqlite::params![id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at],
+                "INSERT OR REPLACE INTO hosts (id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at, save_password) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                rusqlite::params![id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at, save_password],
             )
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
             Ok(())
@@ -126,7 +129,7 @@ impl HostRepository for SqliteHostRepository {
         let pattern = format!("%{}%", escaped);
         self.db.execute(|conn| {
             let mut stmt = conn
-                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at FROM hosts WHERE name LIKE ?1 ESCAPE '\\' OR address LIKE ?1 ESCAPE '\\'")
+                .prepare("SELECT id, name, address, port, username, auth_type, favorite, group_name, notes, created_at, updated_at, save_password FROM hosts WHERE name LIKE ?1 ESCAPE '\\' OR address LIKE ?1 ESCAPE '\\'")
                 .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
 
             let rows = stmt
@@ -211,6 +214,7 @@ mod tests {
             group_name: "".to_string(),
             favorite: false,
             notes: "".to_string(),
+            save_password: false,
             created_at: "".to_string(),
             updated_at: "".to_string(),
         }

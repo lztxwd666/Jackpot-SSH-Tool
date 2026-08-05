@@ -15,6 +15,8 @@ pub struct Host {
     pub group_name: String,
     pub favorite: bool,
     pub notes: String,
+    /// 保存密码/口令勾选标志（仅标志存 SQLite，凭据本体存 OS 凭据库）
+    pub save_password: bool,
     pub created_at: String,
     pub updated_at: String,
 }

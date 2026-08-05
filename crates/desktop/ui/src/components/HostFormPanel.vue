@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 主机新增/编辑滑出面板：从右侧覆盖主机栏（不覆盖工作区），带滑出动画
 // 覆盖式交互：完成/取消后才可进行下一次操作（主机栏无并发需求）
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { t } from '../composables/i18n'
 
 export interface HostForm {
@@ -31,16 +31,28 @@ function emptyForm(): HostForm {
 
 const form = ref<HostForm>(emptyForm())
 
-// 打开时按模式装载初始值；编辑模式不回显密码（Task B4 接线后按保存勾选回显）
+// 密码查看按钮：密文/明文切换（标准设计）
+const showSecret = ref(false)
+
+// 编辑已保存密码的主机：密码框占位提示"密码已保存（更改请输入新密码）"，不显示明文
+const secretPlaceholder = computed(() =>
+  props.mode === 'edit' && form.value.save_password ? t('form.passwordSaved') : t('form.passwordPlaceholder'))
+
+// 打开时按模式装载初始值；编辑模式不回显密码（保留 save_password 勾选状态）
 watch(() => props.open, (v) => {
   if (v) {
     form.value = props.initial
-      ? { ...props.initial, password: '', save_password: false }
+      ? { ...props.initial, password: '' }
       : emptyForm()
+    showSecret.value = false
   }
 })
 
-function submit() { emit('save', { ...form.value }) }
+function submit() {
+  emit('save', { ...form.value })
+  // 安全约定：密码只经 IPC 参数传递，提交后前端立即清空
+  form.value.password = ''
+}
 </script>
 
 <template>
@@ -65,7 +77,30 @@ function submit() { emit('save', { ...form.value }) }
         <label>{{ t('form.group') }} <input v-model="form.group_name" type="text" :placeholder="t('form.groupPlaceholder')" /></label>
         <label>{{ t('form.notes') }} <textarea v-model="form.notes" rows="3" :placeholder="t('form.notesPlaceholder')"></textarea></label>
         <label class="checkbox-label"><input v-model="form.favorite" type="checkbox" /> {{ t('form.favorite') }}</label>
-        <!-- 密码框 + 保存勾选 + 查看按钮：Task B4 实现 -->
+        <!-- 密码认证：密码框 + 查看按钮 + 保存勾选 -->
+        <div v-if="form.auth_type === 'password'" class="secret-field">
+          <label>{{ t('form.password') }}
+            <div class="secret-row">
+              <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
+              <button type="button" class="btn btn-mini" @click="showSecret = !showSecret">{{ showSecret ? t('form.hideSecret') : t('form.showSecret') }}</button>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <input v-model="form.save_password" type="checkbox" /> {{ t('form.savePassword') }}
+          </label>
+        </div>
+        <!-- 私钥认证：口令框 + 查看按钮 + 保存口令勾选（私钥路径字段待后续任务接线） -->
+        <div v-else-if="form.auth_type === 'private_key'" class="secret-field">
+          <label>{{ t('form.passphrase') }}
+            <div class="secret-row">
+              <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
+              <button type="button" class="btn btn-mini" @click="showSecret = !showSecret">{{ showSecret ? t('form.hideSecret') : t('form.showSecret') }}</button>
+            </div>
+          </label>
+          <label class="checkbox-label">
+            <input v-model="form.save_password" type="checkbox" /> {{ t('form.savePassphrase') }}
+          </label>
+        </div>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ t('common.save') }}</button>
         </div>
@@ -88,6 +123,9 @@ function submit() { emit('save', { ...form.value }) }
   background: var(--color-background); color: var(--color-text); font-size: 0.85rem; font-family: inherit;
 }
 .host-form textarea { resize: vertical; }
+.secret-field { display: flex; flex-direction: column; gap: 0.4rem; }
+.secret-row { display: flex; gap: 0.3rem; }
+.secret-row input { flex: 1; min-width: 0; }
 .checkbox-label { flex-direction: row !important; align-items: center; gap: 0.4rem !important; }
 .form-actions { margin-top: 0.4rem; }
 
@@ -98,4 +136,5 @@ function submit() { emit('save', { ...form.value }) }
 .btn:hover { background: var(--color-background-mute); }
 .btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
 .btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
+.btn-mini { padding: 0.15rem 0.45rem; font-size: 0.7rem; white-space: nowrap; }
 </style>

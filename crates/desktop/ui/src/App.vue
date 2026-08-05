@@ -70,16 +70,17 @@ function openNewPanel() { panelOpen.value = 'new'; editingHost.value = null }
 function openEditPanel(host: Host) { panelOpen.value = 'edit'; editingHost.value = host }
 function cancelPanel() { panelOpen.value = 'none'; editingHost.value = null }
 
-// Host → 表单初始值（编辑时不回显密码；Task B4 接线后按保存勾选回显）
+// Host → 表单初始值（编辑时不回显密码，保留保存勾选状态）
 function toForm(host: Host): HostForm {
   return {
     id: host.id, name: host.name, address: host.address, port: host.port,
     username: host.username, auth_type: host.auth_type, group_name: host.group_name,
-    favorite: host.favorite, notes: host.notes, password: '', save_password: false,
+    favorite: host.favorite, notes: host.notes, password: '',
+    save_password: host.save_password,
   }
 }
 
-// 表单保存：新增或更新走现有 save_host 流程（凭据保存由 Task B4 接线）
+// 表单保存：save_host 更新主机配置；凭据部分按勾选/密码状态保存或删除
 async function saveHostForm(form: HostForm) {
   try {
     const existing = form.id ? hosts.value.find(h => h.id === form.id) : undefined
@@ -89,21 +90,42 @@ async function saveHostForm(form: HostForm) {
         name: form.name, address: form.address, port: form.port,
         username: form.username, auth_type: form.auth_type, group_name: form.group_name,
         favorite: form.favorite, notes: form.notes,
+        save_password: form.save_password,
         created_at: existing?.created_at ?? '',
         updated_at: new Date().toISOString(),
       },
     })
+    // 凭据保存/清除（kind 随认证方式：password 或 passphrase）
+    const kind = form.auth_type === 'password' ? 'password' : 'passphrase'
+    if (form.save_password && form.password) {
+      // 勾选保存且输入了密码：保存（或覆盖）OS 凭据库中的凭据
+      await invoke('save_credential', {
+        host: form.address, port: form.port, username: form.username, kind,
+        secret: form.password,
+      })
+    } else if (editingHost.value?.save_password && !form.save_password) {
+      // 取消勾选：删除已保存凭据（编辑前保存过才需要删除）
+      await invoke('delete_credential', {
+        host: form.address, port: form.port, username: form.username, kind,
+      })
+    }
     cancelPanel()
     await loadHosts()
   } catch (e) { console.error('Save failed:', e) }
 }
 
-// 主机删除：确认后删除主机，并连带关闭该主机的标签（凭据删除由 Task B4 接线）
+// 主机删除：确认后删除主机，连带关闭该主机的标签与已保存凭据（password 认证主机）
 async function onDeleteHost(host: Host) {
   const ok = await confirmDialog(t('hosts.deleteConfirm', { name: host.name }))
   if (!ok) return
   try {
     await invoke('delete_host', { id: host.id })
+    if (host.auth_type === 'password') {
+      // 连带清理已保存凭据（幂等：未保存也返回成功；失败不阻断删除流程）
+      await invoke('delete_credential', {
+        host: host.address, port: host.port, username: host.username, kind: 'password',
+      }).catch(() => {})
+    }
     for (const tab of [...tabs.value]) {
       if (tab.hostName === host.name) closeTab(tab.id)
     }
@@ -125,21 +147,28 @@ function onSearch(q: string) {
   doSearch()
 }
 
-// 双击直连流程：密码认证走 Promise 化弹框，确认后执行直连（保存密码静默读取由 Task B4 接线）
+// 双击直连流程：保存过密码的主机静默加载凭据（未保存/加载失败则弹密码框）
 async function connectHost(host: Host) {
   // 防重入：连接进行中忽略新的双击
   if (connecting.value) return
   // 同主机已有活动标签：聚焦而非重复建连
   const existing = tabs.value.find(t => t.hostName === host.name && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return }
+  let secret: string | null = null
   if (host.auth_type === 'password') {
-    // 弹密码框：确认拿到密码后直连，取消则不动作
-    const secret = await promptPassword(host)
-    if (secret == null) return
-    await doConnectWith(host, secret)
-    return
+    // 已保存密码的主机：静默读取凭据；读取失败降级为弹框
+    if (host.save_password) {
+      secret = await invoke('load_credential', {
+        host: host.address, port: host.port, username: host.username, kind: 'password',
+      }).catch(() => null) as string | null
+    }
+    if (secret == null) {
+      // 弹密码框：确认拿到密码后直连，取消则不动作
+      secret = await promptPassword(host)
+      if (secret == null) return
+    }
   }
-  await doConnectWith(host, null)
+  await doConnectWith(host, secret)
 }
 
 // 执行连接：create_session → connect_session → open_shell → 打开标签
@@ -217,12 +246,19 @@ async function reconnectTab(tab: SessionTabState) {
   }
   let secret: string | null = null
   if (host.auth_type === 'password') {
-    // 凭据保存（Task B4）后接线静默读取，本任务先直接弹密码框
-    secret = await promptPassword(host)
+    // 已保存密码的主机：静默读取凭据；读取失败降级为弹框
+    if (host.save_password) {
+      secret = await invoke('load_credential', {
+        host: host.address, port: host.port, username: host.username, kind: 'password',
+      }).catch(() => null) as string | null
+    }
     if (secret == null) {
-      // 用户取消：不发连接请求，恢复断连状态（原断开原因保留）
-      tab.status = 'disconnected'
-      return
+      secret = await promptPassword(host)
+      if (secret == null) {
+        // 用户取消：不发连接请求，恢复断连状态（原断开原因保留）
+        tab.status = 'disconnected'
+        return
+      }
     }
   }
   // 保存连接参数：主机密钥确认后自动重连需要（携带重连上下文，确认后更新现有标签）
