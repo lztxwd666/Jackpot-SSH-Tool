@@ -19,7 +19,7 @@ export interface HostForm {
   save_password: boolean
 }
 
-const props = defineProps<{ open: boolean; mode: 'new' | 'edit'; initial: HostForm | null }>()
+const props = defineProps<{ open: boolean; mode: 'new' | 'edit'; initial: HostForm | null; groups: string[] }>()
 const emit = defineEmits<{ (e: 'save', form: HostForm): void; (e: 'cancel'): void }>()
 
 function emptyForm(): HostForm {
@@ -31,12 +31,27 @@ function emptyForm(): HostForm {
 
 const form = ref<HostForm>(emptyForm())
 
-// 密码查看按钮：密文/明文切换（标准设计）
+// 密码查看按钮：小眼睛图标式（密文/明文切换，标准设计）
 const showSecret = ref(false)
 
 // 编辑已保存密码的主机：密码框占位提示"密码已保存（更改请输入新密码）"，不显示明文
 const secretPlaceholder = computed(() =>
   props.mode === 'edit' && form.value.save_password ? t('form.passwordSaved') : t('form.passwordPlaceholder'))
+
+// 分组下拉：选择已有分组 / 新建分组（新建时显示输入框）
+// groupSelect 为下拉当前值（'' 未分组 | 分组名 | '__new__' 新建）；form.group_name 为最终保存值
+const groupSelect = ref('')
+const creatingGroup = ref(false)
+const existingGroups = computed(() => props.groups.filter(g => g && g !== ''))
+watch(groupSelect, (v) => {
+  if (v === '__new__') {
+    creatingGroup.value = true
+    form.value.group_name = ''
+  } else {
+    creatingGroup.value = false
+    form.value.group_name = v
+  }
+})
 
 // 打开时按模式装载初始值；编辑模式不回显密码（保留 save_password 勾选状态）
 watch(() => props.open, (v) => {
@@ -45,6 +60,8 @@ watch(() => props.open, (v) => {
       ? { ...props.initial, password: '' }
       : emptyForm()
     showSecret.value = false
+    creatingGroup.value = false
+    groupSelect.value = form.value.group_name || ''
   }
 })
 
@@ -74,33 +91,57 @@ function submit() {
             <option value="agent">{{ t('form.authAgent') }}</option>
           </select>
         </label>
-        <label>{{ t('form.group') }} <input v-model="form.group_name" type="text" :placeholder="t('form.groupPlaceholder')" /></label>
-        <label>{{ t('form.notes') }} <textarea v-model="form.notes" rows="3" :placeholder="t('form.notesPlaceholder')"></textarea></label>
-        <label class="checkbox-label"><input v-model="form.favorite" type="checkbox" /> {{ t('form.favorite') }}</label>
-        <!-- 密码认证：密码框 + 查看按钮 + 保存勾选 -->
+        <!-- 认证相关字段聚合：密码/口令框紧随认证方式（用户反馈：置于表单底部不合理） -->
+        <!-- 密码认证：密码框 + 小眼睛查看图标 + 保存勾选 -->
         <div v-if="form.auth_type === 'password'" class="secret-field">
           <label>{{ t('form.password') }}
             <div class="secret-row">
               <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
-              <button type="button" class="btn btn-mini" @click="showSecret = !showSecret">{{ showSecret ? t('form.hideSecret') : t('form.showSecret') }}</button>
+              <!-- 小眼睛图标：查看/隐藏密码切换（feather eye 风格，替代文字按钮） -->
+              <button type="button" class="eye-toggle" :title="showSecret ? t('form.hideSecret') : t('form.showSecret')" @click="showSecret = !showSecret">
+                <svg v-if="!showSecret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+              </button>
             </div>
           </label>
           <label class="checkbox-label">
             <input v-model="form.save_password" type="checkbox" /> {{ t('form.savePassword') }}
           </label>
         </div>
-        <!-- 私钥认证：口令框 + 查看按钮 + 保存口令勾选（私钥路径字段待后续任务接线） -->
+        <!-- 私钥认证：口令框 + 小眼睛查看图标 + 保存口令勾选（私钥路径字段待后续任务接线） -->
         <div v-else-if="form.auth_type === 'private_key'" class="secret-field">
           <label>{{ t('form.passphrase') }}
             <div class="secret-row">
               <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
-              <button type="button" class="btn btn-mini" @click="showSecret = !showSecret">{{ showSecret ? t('form.hideSecret') : t('form.showSecret') }}</button>
+              <button type="button" class="eye-toggle" :title="showSecret ? t('form.hideSecret') : t('form.showSecret')" @click="showSecret = !showSecret">
+                <svg v-if="!showSecret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
+                </svg>
+              </button>
             </div>
           </label>
           <label class="checkbox-label">
             <input v-model="form.save_password" type="checkbox" /> {{ t('form.savePassphrase') }}
           </label>
         </div>
+        <!-- 分组下拉：选择已有分组 / 新建分组（常见程序设计逻辑） -->
+        <label>{{ t('form.group') }}
+          <select v-model="groupSelect">
+            <option value="">{{ t('form.groupNone') }}</option>
+            <option v-for="g in existingGroups" :key="g" :value="g">{{ g }}</option>
+            <option value="__new__">{{ t('form.groupNew') }}</option>
+          </select>
+          <input v-if="creatingGroup" v-model="form.group_name" type="text" :placeholder="t('form.groupNewName')" />
+        </label>
+        <label>{{ t('form.notes') }} <textarea v-model="form.notes" rows="3" :placeholder="t('form.notesPlaceholder')"></textarea></label>
+        <label class="checkbox-label"><input v-model="form.favorite" type="checkbox" /> {{ t('form.favorite') }}</label>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">{{ t('common.save') }}</button>
         </div>
@@ -111,7 +152,8 @@ function submit() {
 
 <style scoped>
 /* position: fixed 覆盖右侧主机栏；transform: translateX 滑出动画（约 200ms ease） */
-.form-overlay { position: fixed; top: 0; right: 0; bottom: 0; width: 260px; background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
+/* 宽度与右侧主机栏一致（220px），视觉不突兀（用户反馈） */
+.form-overlay { position: fixed; top: 0; right: 0; bottom: 0; width: 220px; background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
 .form-overlay.open { transform: translateX(0); }
 .form-panel { display: flex; flex-direction: column; height: 100%; padding: 1rem; overflow-y: auto; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
@@ -126,6 +168,13 @@ function submit() {
 .secret-field { display: flex; flex-direction: column; gap: 0.4rem; }
 .secret-row { display: flex; gap: 0.3rem; }
 .secret-row input { flex: 1; min-width: 0; }
+/* 小眼睛图标按钮：无边框透明底，悬停显背景（密码查看切换） */
+.eye-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0.3rem; border: 1px solid var(--color-border); border-radius: 4px;
+  background: var(--color-background); color: var(--color-text); cursor: pointer;
+}
+.eye-toggle:hover { background: var(--color-background-mute); }
 .checkbox-label { flex-direction: row !important; align-items: center; gap: 0.4rem !important; }
 .form-actions { margin-top: 0.4rem; }
 
@@ -136,5 +185,4 @@ function submit() {
 .btn:hover { background: var(--color-background-mute); }
 .btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
 .btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
-.btn-mini { padding: 0.15rem 0.45rem; font-size: 0.7rem; white-space: nowrap; }
 </style>

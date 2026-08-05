@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // 右侧主机栏：左键选中 / 双击直连 / 右键菜单（连接、编辑、Ping、删除）
-// 含搜索栏与语言切换页脚（沿用原 App.vue 布局）
-import { ref } from 'vue'
-import { t, type Locale } from '../composables/i18n'
+// 含搜索栏；主机列表按分组自动组织（分组标题 + 组内主机）
+// 语言切换已移至左侧底部状态栏（用户反馈：主机栏与底栏分离，底栏后续放设置图标等功能）
+import { computed, ref } from 'vue'
+import { t } from '../composables/i18n'
 
 // 与后端 list_hosts 返回的 Host 结构一致（前端 host 列表即为完整 Host，不做收窄）
 export interface Host {
@@ -23,7 +24,6 @@ export interface Host {
 const props = defineProps<{
   hosts: Host[]
   searchQuery: string
-  locale: Locale
 }>()
 
 const emit = defineEmits<{
@@ -33,11 +33,21 @@ const emit = defineEmits<{
   (e: 'delete', host: Host): void
   (e: 'new'): void
   (e: 'search', query: string): void
-  (e: 'locale-change', locale: Locale): void
 }>()
 
 const selectedId = ref<string | null>(null)
 const menu = ref<{ x: number; y: number; host: Host } | null>(null)
+
+// 按分组组织主机列表：[分组名, 组内主机] 数组；空分组名归入"未分组"标题
+const groupedHosts = computed(() => {
+  const groups = new Map<string, Host[]>()
+  for (const host of props.hosts) {
+    const key = host.group_name || ''
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(host)
+  }
+  return Array.from(groups.entries())
+})
 
 function onContextMenu(e: MouseEvent, host: Host) {
   e.preventDefault()
@@ -57,9 +67,6 @@ function pick(action: 'connect' | 'edit' | 'ping' | 'delete') {
 function onSearchInput(e: Event) {
   emit('search', (e.target as HTMLInputElement).value)
 }
-function onLocaleChange(e: Event) {
-  emit('locale-change', (e.target as HTMLSelectElement).value as Locale)
-}
 </script>
 
 <template>
@@ -71,21 +78,20 @@ function onLocaleChange(e: Event) {
     <div class="search-bar">
       <input :value="searchQuery" type="text" :placeholder="t('hosts.searchPlaceholder')" @input="onSearchInput" />
     </div>
-    <ul class="host-list">
-      <li v-for="host in hosts" :key="host.id"
-        :class="{ active: selectedId === host.id }"
-        @click="selectedId = host.id"
-        @dblclick="emit('connect', host)"
-        @contextmenu="onContextMenu($event, host)">
-        <span class="host-name">{{ host.name }}</span>
-        <span class="host-addr">{{ host.address }}:{{ host.port }}</span>
-      </li>
-    </ul>
-    <div class="sidebar-footer">
-      <select class="locale-select" :value="locale" @change="onLocaleChange">
-        <option value="en">English</option>
-        <option value="zh">中文</option>
-      </select>
+    <div class="host-list">
+      <template v-for="[groupName, groupHosts] in groupedHosts" :key="groupName || '__unassigned__'">
+        <div class="group-header">{{ groupName || t('hosts.groupUnassigned') }}</div>
+        <ul>
+          <li v-for="host in groupHosts" :key="host.id"
+            :class="{ active: selectedId === host.id }"
+            @click="selectedId = host.id"
+            @dblclick="emit('connect', host)"
+            @contextmenu="onContextMenu($event, host)">
+            <span class="host-name">{{ host.name }}</span>
+            <span class="host-addr">{{ host.address }}:{{ host.port }}</span>
+          </li>
+        </ul>
+      </template>
     </div>
     <div v-if="menu" class="context-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
       <div class="menu-item" @click="pick('connect')">{{ t('common.connect') }}</div>
@@ -97,20 +103,21 @@ function onLocaleChange(e: Event) {
 </template>
 
 <style scoped>
-/* 主机栏整体：沿用原 App.vue 的 sidebar 布局样式 */
+/* 主机栏整体：沿用原 App.vue 的 sidebar 布局样式（上下贯通，无页脚） */
 .host-panel { width: 220px; min-width: 220px; background: var(--color-background-soft); border-left: 1px solid var(--color-border); display: flex; flex-direction: column; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--color-border); }
 .sidebar-header h2 { font-size: 0.95rem; color: var(--color-heading); }
 .search-bar { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--color-border); }
 .search-bar input { width: 100%; padding: 0.3rem 0.4rem; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-background); color: var(--color-text); font-size: 0.8rem; box-sizing: border-box; }
 .host-list { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
-.host-list li { padding: 0.5rem 0.8rem; cursor: pointer; border-bottom: 1px solid var(--color-border); }
-.host-list li:hover { background: var(--color-background-mute); }
-.host-list li.active { background: var(--color-border-hover); }
+/* 分组标题：小号灰色，与主机项区分 */
+.group-header { padding: 0.35rem 0.8rem 0.15rem; font-size: 0.7rem; font-weight: 600; color: var(--color-text); opacity: 0.55; text-transform: uppercase; }
+.host-list ul { list-style: none; padding: 0; margin: 0; }
+.host-list ul li { padding: 0.5rem 0.8rem; cursor: pointer; border-bottom: 1px solid var(--color-border); }
+.host-list ul li:hover { background: var(--color-background-mute); }
+.host-list ul li.active { background: var(--color-border-hover); }
 .host-name { display: block; font-weight: 600; color: var(--color-heading); font-size: 0.85rem; }
 .host-addr { font-size: 0.7rem; color: var(--color-text); opacity: 0.7; }
-.sidebar-footer { padding: 0.4rem 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
-.locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }
 
 /* context-menu 沿用 RemoteFileTree 样式；删除项红色警示 */
 .context-menu {

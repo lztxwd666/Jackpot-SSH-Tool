@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import HostPanel, { type Host } from './components/HostPanel.vue'
@@ -19,6 +19,9 @@ interface PingResult {
 
 const hosts = ref<Host[]>([])
 const searchQuery = ref('')
+// 已有分组名列表（表单分组下拉选项，从主机数据聚合去重）
+const allGroups = computed(() =>
+  Array.from(new Set(hosts.value.map(h => h.group_name).filter((g): g is string => !!g))))
 const status = ref('initializing')
 
 // 双击直连/手动重连状态：密码弹框（Promise 化，确认 resolve 密码+保存勾选 / 取消 resolve null）
@@ -607,30 +610,35 @@ onBeforeUnmount(() => {
           />
         </template>
       </div>
-      <!-- 状态栏：左侧区域底部，展示运行状态（文案走 i18n，M11 修复） -->
+      <!-- 状态栏：左侧区域底部，运行状态徽标 + 语言切换（用户反馈：与主机栏分离，
+           底部栏后续放置设置图标等功能，语言切换归属此栏） -->
       <div class="status-bar">
         <span class="status-badge">{{ t('status.' + status) }}</span>
-        <!-- 后续扩展：传输统计/网络状态等显示预留位（当前仅运行状态徽标） -->
+        <span class="status-spacer"></span>
+        <select class="locale-select" :value="locale" @change="onLocaleChange(($event.target as HTMLSelectElement).value as Locale)">
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+        <!-- 后续扩展：设置图标等显示预留位（当前仅状态徽标 + 语言切换） -->
       </div>
     </div>
 
-    <!-- 右侧主机栏：双击直连 + 右键菜单 + 滑出表单面板 -->
+    <!-- 右侧主机栏：双击直连 + 右键菜单 + 滑出表单面板（上下贯通，无底部栏） -->
     <HostPanel
       :hosts="hosts"
       :search-query="searchQuery"
-      :locale="locale"
       @connect="connectHost"
       @edit="openEditPanel"
       @ping="onPing"
       @delete="onDeleteHost"
       @new="openNewPanel"
       @search="onSearch"
-      @locale-change="onLocaleChange"
     />
     <HostFormPanel
       :open="panelOpen !== 'none'"
       :mode="panelOpen === 'none' ? 'new' : panelOpen"
       :initial="editingHost ? toForm(editingHost) : null"
+      :groups="allGroups"
       @save="saveHostForm"
       @cancel="cancelPanel"
     />
@@ -696,8 +704,10 @@ onBeforeUnmount(() => {
 .tab-close { color: var(--color-text); opacity: 0.6; cursor: pointer; }
 .tab-close:hover { opacity: 1; }
 .tab-content { flex: 1; display: flex; overflow: hidden; }
-.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; }
+.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; }
 .status-badge { font-size: 0.7rem; color: hsla(160, 100%, 37%, 1); }
+.status-spacer { flex: 1; }
+.locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }
 
 .placeholder { flex: 1; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text); opacity: 0.5; }
 

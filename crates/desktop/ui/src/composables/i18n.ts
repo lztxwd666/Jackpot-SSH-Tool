@@ -70,6 +70,9 @@ const messages: Record<Locale, Record<string, string>> = {
     'form.authPrivateKey': 'Private Key',
     'form.authAgent': 'SSH Agent',
     'form.group': 'Group',
+    'form.groupNone': 'No group',
+    'form.groupNew': 'New group...',
+    'form.groupNewName': 'New group name',
     'form.groupPlaceholder': 'Production',
     'form.notes': 'Notes',
     'form.notesPlaceholder': 'Optional notes...',
@@ -100,6 +103,7 @@ const messages: Record<Locale, Record<string, string>> = {
     // 文件树
     'tree.localTitle': 'Local Files',
     'tree.remoteTitle': 'Remote Files',
+    'hosts.groupUnassigned': 'Unassigned',
     'tree.transferLocked': 'Transfer in progress — file tree temporarily locked',
 
     // 输入对话框
@@ -187,6 +191,9 @@ const messages: Record<Locale, Record<string, string>> = {
     'form.authPrivateKey': '私钥',
     'form.authAgent': 'SSH Agent',
     'form.group': '分组',
+    'form.groupNone': '未分组',
+    'form.groupNew': '新建分组...',
+    'form.groupNewName': '新分组名称',
     'form.groupPlaceholder': '生产环境',
     'form.notes': '备注',
     'form.notesPlaceholder': '可选备注...',
@@ -217,6 +224,7 @@ const messages: Record<Locale, Record<string, string>> = {
     // 文件树
     'tree.localTitle': '本地文件',
     'tree.remoteTitle': '远程文件',
+    'hosts.groupUnassigned': '未分组',
     'tree.transferLocked': '传输进行中，文件树暂时锁定',
 
     // 输入对话框

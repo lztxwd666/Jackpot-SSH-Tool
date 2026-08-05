@@ -49,22 +49,8 @@ function uploadFromLocal(localPath: string) {
 </script>
 
 <template>
+  <!-- 布局顺序：本地文件树 | 远程文件树 | 终端（恢复 Stage 5 原设计；Task 5 曾误写为终端在左） -->
   <div class="session-tab">
-    <div class="terminal-wrapper">
-      <div class="terminal-header">
-        <span class="connection-info">{{ tab.hostName }}</span>
-        <div class="header-actions">
-          <!-- 断开时显示手动重连按钮（从不主动重连，仅提示状态） -->
-          <button v-if="tab.status === 'disconnected'" class="btn btn-primary" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
-          <button class="btn btn-danger" @click="emit('close')">{{ tab.status === 'connected' ? t('tab.disconnect') : t('tab.close') }}</button>
-        </div>
-      </div>
-      <!-- 状态条：连接中 / 已断开（原因）/ 重连中 -->
-      <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
-        {{ statusText(tab) }}
-      </div>
-      <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
-    </div>
     <div class="panel" style="width:180px; min-width:180px;">
       <LocalFileTree
         :refreshKey="localRefreshKey"
@@ -83,12 +69,28 @@ function uploadFromLocal(localPath: string) {
         @current-dir="(p: string) => remoteCurrentDir = p"
       />
     </div>
+    <div class="terminal-wrapper">
+      <div class="terminal-header">
+        <span class="connection-info">{{ tab.hostName }}</span>
+        <div class="header-actions">
+          <!-- 断开时显示手动重连按钮（从不主动重连，仅提示状态） -->
+          <button v-if="tab.status === 'disconnected'" class="btn btn-primary" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
+          <button class="btn btn-danger" @click="emit('close')">{{ tab.status === 'connected' ? t('tab.disconnect') : t('tab.close') }}</button>
+        </div>
+      </div>
+      <!-- 状态条：连接中 / 已断开（原因）/ 重连中 -->
+      <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
+        {{ statusText(tab) }}
+      </div>
+      <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
+    </div>
   </div>
 </template>
 
 <style scoped>
 .session-tab { display: flex; flex: 1; min-width: 0; }
-.terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+/* 终端与远程文件树之间的分隔线（线条对齐：各区域分隔统一 1px var(--color-border)） */
+.terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; }
 .header-actions { display: flex; gap: 0.4rem; }
