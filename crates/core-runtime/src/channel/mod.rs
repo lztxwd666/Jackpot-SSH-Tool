@@ -1,6 +1,8 @@
 //! SSH 通道管理模块（Stage 6: 纯句柄）
 //! Channel 不再持有 ssh2 资源，所有 SSH I/O 经 worker 线程串行执行
 
+mod sftp;
+
 use core_common::{ChannelId, ChannelState, ChannelType, CoreError, CoreResult, PtySize, SessionId};
 use core_event::event::{ChannelEvent, CoreEvent};
 use core_event::EventDispatcher;
@@ -87,39 +89,7 @@ impl Channel {
         true
     }
 
-    // ========== SFTP 方法（Task 5 迁移至 worker，当前为兼容性桩） ==========
-
-    pub fn sftp_read_dir(&self, _path: &str) -> CoreResult<Vec<core_common::FileEntry>> {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_create_dir(&self, _path: &str) -> CoreResult<()> {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_remove_file(&self, _path: &str) -> CoreResult<()> {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_remove_dir(&self, _path: &str) -> CoreResult<()> {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_rename(&self, _old: &str, _new: &str) -> CoreResult<()> {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_download_file<F>(&self, _remote_path: &str, _local_path: &str, _on_progress: F) -> CoreResult<u64>
-    where F: FnMut(u64, u64)
-    {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
-
-    pub fn sftp_upload_file<F>(&self, _remote_path: &str, _local_path: &str, _on_progress: F) -> CoreResult<u64>
-    where F: FnMut(u64, u64)
-    {
-        Err(CoreError::Internal("SFTP not yet migrated to worker (Task 5)".into()))
-    }
+    // ========== SFTP 方法（Task 5 迁移至 worker：投递命令 + 等待回执，见 sftp.rs） ==========
 }
 
 /// 创建 Shell 通道的原始 ssh2::Channel（供 worker 调用，不注册到外部队列）

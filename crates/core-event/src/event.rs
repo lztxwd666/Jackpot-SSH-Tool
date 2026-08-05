@@ -15,6 +15,7 @@ pub enum CoreEvent {
     HostKey(HostKeyEvent),
     Session(SessionEvent),
     Channel(ChannelEvent),
+    Transfer(TransferEvent),
     Host(HostEvent),
 }
 
@@ -139,6 +140,33 @@ pub enum HostEvent {
     Deleted { host_id: HostId, name: String },
 }
 
+/// 文件传输方向
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransferDirection {
+    Download,
+    Upload,
+}
+
+/// 文件传输状态事件（Transfer 领域）
+/// Stage 6 落地传输窗口标记：Locked/Unlocked 描述 sftp 通道的传输占用期
+/// （worker 单线程内同一时刻仅允许一个传输）；细粒度进度暂由桌面层
+/// transfer-progress 事件承担，未来迁入本事件域
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail")]
+pub enum TransferEvent {
+    /// 传输开始：sftp 通道锁定
+    Locked {
+        session_id: SessionId,
+        channel_id: ChannelId,
+        direction: TransferDirection,
+    },
+    /// 传输结束（成功/失败/取消）：sftp 通道解锁
+    Unlocked {
+        session_id: SessionId,
+        channel_id: ChannelId,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,6 +207,34 @@ mod tests {
             parsed,
             CoreEvent::Connection(ConnectionEvent::Connecting { ref host, port: 22 })
             if host == "example.com"
+        ));
+    }
+
+    #[test]
+    fn test_transfer_event_roundtrip() {
+        let event = CoreEvent::Transfer(TransferEvent::Locked {
+            session_id: SessionId::new(),
+            channel_id: ChannelId::new(),
+            direction: TransferDirection::Download,
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: CoreEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            CoreEvent::Transfer(TransferEvent::Locked {
+                direction: TransferDirection::Download,
+                ..
+            })
+        ));
+        let unlocked = CoreEvent::Transfer(TransferEvent::Unlocked {
+            session_id: SessionId::new(),
+            channel_id: ChannelId::new(),
+        });
+        let json = serde_json::to_string(&unlocked).unwrap();
+        let parsed: CoreEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            CoreEvent::Transfer(TransferEvent::Unlocked { .. })
         ));
     }
 }

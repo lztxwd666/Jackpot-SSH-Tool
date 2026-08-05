@@ -9,5 +9,5 @@ pub use dispatcher::{
 };
 pub use event::{
     ApplicationEvent, ChannelEvent, ConnectionEvent, CoreEvent, HostEvent, HostKeyEvent,
-    SessionEvent,
+    SessionEvent, TransferDirection, TransferEvent,
 };

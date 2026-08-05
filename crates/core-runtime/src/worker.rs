@@ -11,7 +11,7 @@ use core_common::{
     SessionId, SessionState,
 };
 use core_event::EventDispatcher;
-use core_event::event::{ChannelEvent, CoreEvent, SessionEvent};
+use core_event::event::{ChannelEvent, CoreEvent, SessionEvent, TransferDirection, TransferEvent};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -24,6 +24,9 @@ const IDLE_INTERVAL_MS: u64 = 25;
 
 /// keepalive 发送间隔：连接空闲时每 30 秒发送一次 SSH keepalive 请求以保持连接活跃
 const KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// SFTP 流式传输分块大小（64KB）：减少循环次数加速大文件，兼顾内存占用
+const SFTP_CHUNK_SIZE: usize = 65536;
 
 /// keepalive 间隔判定：now 距 last 达到 interval 返回 true
 fn keepalive_due(
@@ -148,19 +151,18 @@ impl WorkerHandle {
 
 /// worker 主循环入口（std::thread）
 /// state 与 Session 共享（外部查询状态）；重连所需配置由命令携带（后续任务扩展）
+/// rx 移入 Worker 结构：传输执行期间由 transfer_*_inner 嵌套 try_recv 处理非传输命令
 pub(crate) fn run_loop(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>,
+    rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>,
     state: Arc<std::sync::RwLock<SessionState>>,
     dispatcher: Arc<dyn EventDispatcher>,
     session_id: SessionId,
 ) {
-    let mut w = Worker::new(state, dispatcher, session_id);
+    let mut w = Worker::new(state, dispatcher, session_id, rx);
     loop {
-        // 处理所有已到达的命令（传输执行中会嵌套处理，见 Task 5）
-        while let Ok(cmd) = rx.try_recv() {
-            if !w.handle(cmd) {
-                return; // Close 完成，结束线程
-            }
+        // 处理所有已到达的命令（传输执行中会嵌套处理，见 transfer_*_inner）
+        if !w.drain_nested_commands() {
+            return; // Close 完成，结束线程
         }
         w.do_idle_work();
         std::thread::sleep(std::time::Duration::from_millis(IDLE_INTERVAL_MS));
@@ -178,6 +180,8 @@ struct Worker {
     cancel: AtomicBool,                // Task 5 传输取消使用
     raw_channels: HashMap<ChannelId, ChannelInner>, // worker 内通道注册表
     channels: Vec<ChannelId>,          // 已打开通道 ID 列表
+    rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>, // 命令队列（嵌套 try_recv 取命令）
+    transferring: bool,                // 传输进行中：拒绝嵌套传输
 }
 
 impl Worker {
@@ -185,6 +189,7 @@ impl Worker {
         state: Arc<std::sync::RwLock<SessionState>>,
         dispatcher: Arc<dyn EventDispatcher>,
         session_id: SessionId,
+        rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>,
     ) -> Self {
         Self {
             state,
@@ -196,6 +201,8 @@ impl Worker {
             cancel: AtomicBool::new(false),
             raw_channels: HashMap::new(),
             channels: Vec::new(),
+            rx,
+            transferring: false,
         }
     }
 
@@ -393,9 +400,272 @@ impl Worker {
         }
     }
 
+    /// 找到 Sftp 通道的原始句柄（每个 session 仅一个 sftp 通道，取第一个）
+    fn get_sftp(&mut self) -> CoreResult<&mut ssh2::Sftp> {
+        for inner in self.raw_channels.values_mut() {
+            if let ChannelInner::Sftp(sftp) = inner {
+                return Ok(sftp);
+            }
+        }
+        Err(CoreError::Internal("sftp channel not found".into()))
+    }
+
+    /// 当前 Sftp 通道 id（与 get_sftp 同源，用于传输事件广播）
+    fn sftp_channel_id(&self) -> Option<ChannelId> {
+        self.raw_channels
+            .iter()
+            .find_map(|(id, inner)| matches!(inner, ChannelInner::Sftp(_)).then_some(*id))
+    }
+
+    /// 列出远程目录（过滤 . ..、构建绝对路径、目录优先排序）
+    fn sftp_read_dir_inner(&mut self, path: &str) -> CoreResult<Vec<FileEntry>> {
+        let sftp = self.get_sftp()?;
+        let entries = sftp_retry_worker(|| sftp.readdir(std::path::Path::new(path)))
+            .map_err(|e| CoreError::Internal(format!("sftp readdir failed: {e}")))?;
+        // 构建绝对路径
+        let base = path.trim_end_matches('/');
+        let mut files = Vec::new();
+        for (p, stat) in entries {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            // 过滤特殊条目与无法表示文件名的条目
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            files.push(FileEntry {
+                name: name.clone(),
+                path: format!("{}/{}", base, name),
+                size: stat.size.unwrap_or(0),
+                is_dir: stat.is_dir(),
+                modified: format!("{}", stat.mtime.unwrap_or(0)),
+            });
+        }
+        files.sort_by(|a, b| {
+            b.is_dir
+                .cmp(&a.is_dir)
+                .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        Ok(files)
+    }
+
+    /// 创建远程目录（权限 0o755）
+    fn sftp_create_dir_inner(&mut self, path: &str) -> CoreResult<()> {
+        let sftp = self.get_sftp()?;
+        sftp_retry_worker(|| sftp.mkdir(std::path::Path::new(path), 0o755))
+            .map_err(|e| CoreError::Internal(format!("sftp mkdir failed: {e}")))?;
+        Ok(())
+    }
+
+    /// 删除远程文件或目录（unlink / rmdir）
+    fn sftp_remove_inner(&mut self, path: &str, is_dir: bool) -> CoreResult<()> {
+        let sftp = self.get_sftp()?;
+        if is_dir {
+            sftp_retry_worker(|| sftp.rmdir(std::path::Path::new(path)))
+                .map_err(|e| CoreError::Internal(format!("sftp rmdir failed: {e}")))?;
+        } else {
+            sftp_retry_worker(|| sftp.unlink(std::path::Path::new(path)))
+                .map_err(|e| CoreError::Internal(format!("sftp unlink failed: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// 重命名远程文件或目录
+    fn sftp_rename_inner(&mut self, old: &str, new: &str) -> CoreResult<()> {
+        let sftp = self.get_sftp()?;
+        let old_path = std::path::Path::new(old);
+        let new_path = std::path::Path::new(new);
+        sftp_retry_worker(|| sftp.rename(old_path, new_path, None))
+            .map_err(|e| CoreError::Internal(format!("sftp rename failed: {e}")))?;
+        Ok(())
+    }
+
+    /// 传输：流式读写 + 每 chunk 后嵌套处理非传输命令
+    /// 进入时广播 Transfer Locked，退出（成功/失败/取消）时广播 Unlocked
+    fn handle_transfer_inner(
+        &mut self,
+        kind: TransferKind,
+        remote: &str,
+        local: &str,
+        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+    ) -> CoreResult<u64> {
+        let sftp_channel_id = self
+            .sftp_channel_id()
+            .ok_or_else(|| CoreError::Internal("sftp channel not found".into()))?;
+        self.transferring = true;
+        self.dispatch(CoreEvent::Transfer(TransferEvent::Locked {
+            session_id: self.session_id(),
+            channel_id: sftp_channel_id,
+            direction: match kind {
+                TransferKind::Download => TransferDirection::Download,
+                TransferKind::Upload => TransferDirection::Upload,
+            },
+        }));
+        let result = match kind {
+            TransferKind::Download => self.transfer_download_inner(remote, local, &progress),
+            TransferKind::Upload => self.transfer_upload_inner(remote, local, &progress),
+        };
+        self.dispatch(CoreEvent::Transfer(TransferEvent::Unlocked {
+            session_id: self.session_id(),
+            channel_id: sftp_channel_id,
+        }));
+        self.transferring = false;
+        result
+    }
+
+    /// 下载循环：每 chunk 后嵌套处理队列（终端输入/断开等立即响应）
+    fn transfer_download_inner(
+        &mut self,
+        remote_path: &str,
+        local_path: &str,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+    ) -> CoreResult<u64> {
+        // 获取远程文件大小（用于进度条）
+        let total = {
+            let sftp = self.get_sftp()?;
+            sftp_retry_worker(|| sftp.stat(std::path::Path::new(remote_path)))
+                .map_err(|e| CoreError::Internal(format!("sftp stat failed: {e}")))?
+                .size
+                .unwrap_or(0)
+        };
+        // 创建本地文件
+        let mut local_file = std::fs::File::create(local_path)
+            .map_err(|e| CoreError::Internal(format!("create local file failed: {e}")))?;
+        // 打开远程文件（File 持有会话引用，不借用 sftp 句柄）
+        let mut file = {
+            let sftp = self.get_sftp()?;
+            sftp_retry_worker(|| sftp.open(std::path::Path::new(remote_path)))
+                .map_err(|e| CoreError::Internal(format!("sftp open failed: {e}")))?
+        };
+        let mut done: u64 = 0;
+        let mut chunk = [0u8; SFTP_CHUNK_SIZE];
+        loop {
+            // 嵌套处理已到达命令（断开/输入/列目录等立即响应）
+            self.drain_nested_commands();
+            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break; // 取消：走统一失败清理
+            }
+            match file.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    local_file.write_all(&chunk[..n]).map_err(|e| {
+                        CoreError::Internal(format!("local write failed: {e}"))
+                    })?;
+                    done += n as u64;
+                    let _ = progress.send((done, total));
+                }
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        continue;
+                    }
+                    return Err(CoreError::Internal(format!("sftp read failed: {e}")));
+                }
+            }
+        }
+        // 完整性校验：写入字节数必须与远端文件大小一致
+        if total > 0 && done != total {
+            return Err(CoreError::Internal(format!(
+                "download size mismatch: got {done} bytes, expected {total}"
+            )));
+        }
+        Ok(done)
+    }
+
+    /// 上传循环：每 chunk 后嵌套处理队列（断开/输入等立即响应）
+    fn transfer_upload_inner(
+        &mut self,
+        remote_path: &str,
+        local_path: &str,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+    ) -> CoreResult<u64> {
+        // 获取本地文件大小（用于进度条）
+        let total = std::fs::metadata(local_path)
+            .map_err(|e| CoreError::Internal(format!("local metadata failed: {e}")))?
+            .len();
+        // 打开本地文件
+        let mut local_file = std::fs::File::open(local_path)
+            .map_err(|e| CoreError::Internal(format!("open local file failed: {e}")))?;
+        // 创建远程文件
+        let mut file = {
+            let sftp = self.get_sftp()?;
+            sftp_retry_worker(|| sftp.create(std::path::Path::new(remote_path)))
+                .map_err(|e| CoreError::Internal(format!("sftp create failed: {e}")))?
+        };
+        let mut done: u64 = 0;
+        let mut chunk = [0u8; SFTP_CHUNK_SIZE];
+        let result = (|| -> CoreResult<u64> {
+            loop {
+                // 嵌套处理已到达命令（断开/输入/列目录等立即响应）
+                self.drain_nested_commands();
+                if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    break; // 取消：走统一失败清理
+                }
+                let n = local_file.read(&mut chunk).map_err(|e| {
+                    CoreError::Internal(format!("local read failed: {e}"))
+                })?;
+                if n == 0 {
+                    break;
+                }
+                // 写入完整块（处理 EAGAIN 与部分写入）
+                let mut off = 0;
+                while off < n {
+                    match file.write(&chunk[off..n]) {
+                        Ok(w) => off += w,
+                        Err(e) => {
+                            if crate::ssh::is_would_block(&e) {
+                                std::thread::sleep(std::time::Duration::from_millis(2));
+                                continue;
+                            }
+                            return Err(CoreError::Internal(format!("sftp write failed: {e}")));
+                        }
+                    }
+                }
+                done += n as u64;
+                let _ = progress.send((done, total));
+            }
+            // 完整性校验：远端文件大小必须与本地一致
+            let remote_size = {
+                let sftp = self.get_sftp()?;
+                sftp_retry_worker(|| sftp.stat(std::path::Path::new(remote_path)))
+                    .map_err(|e| CoreError::Internal(format!("sftp stat failed: {e}")))?
+                    .size
+                    .unwrap_or(0)
+            };
+            if remote_size != done {
+                return Err(CoreError::Internal(format!(
+                    "upload size mismatch: remote has {remote_size} bytes, expected {done}"
+                )));
+            }
+            Ok(done)
+        })();
+        if result.is_err() {
+            // 清理不完整的远端文件（旧实现行为保持：任何失败路径删除半成品）
+            if let Ok(sftp) = self.get_sftp() {
+                let _ = sftp.unlink(std::path::Path::new(remote_path));
+            }
+            tracing::warn!(%remote_path, %local_path, "upload failed, partial remote file removed");
+        }
+        result
+    }
+
+    /// 处理队列中所有已到达命令；返回 false 表示应结束线程
+    /// run_loop 主循环与传输循环（transfer_*_inner 每 chunk 后）共用：
+    /// 传输期间嵌套到达的传输命令由 handle 内 transferring 检查拒绝（返回 busy）
+    fn drain_nested_commands(&mut self) -> bool {
+        let mut keep_running = true;
+        while let Ok(cmd) = self.rx.try_recv() {
+            if !self.handle(cmd) {
+                keep_running = false;
+                break;
+            }
+        }
+        keep_running
+    }
+
     /// 处理单条命令；返回 false 表示应结束线程
-    /// 已实现：Connect / Disconnect / Close / Exec
-    /// 其余命令后续任务逐个替换为真实现
     fn handle(&mut self, cmd: WorkerCommand) -> bool {
         match cmd {
             WorkerCommand::Connect {
@@ -450,31 +720,42 @@ impl Worker {
             WorkerCommand::CloseAllChannels => {
                 self.close_all_channels_inner();
             }
-            // 其余命令 Task 5-6 实现，先回执错误（保证调用方不挂起）
-            WorkerCommand::SftpReadDir { reply, .. } => {
-                let _ = reply.send(Err(CoreError::Internal(
-                    "command not implemented yet".into(),
-                )));
+            WorkerCommand::SftpReadDir { path, reply } => {
+                let r = self.sftp_read_dir_inner(&path);
+                let _ = reply.send(r);
             }
-            WorkerCommand::SftpCreateDir { reply, .. } => {
-                let _ = reply.send(Err(CoreError::Internal(
-                    "command not implemented yet".into(),
-                )));
+            WorkerCommand::SftpCreateDir { path, reply } => {
+                let r = self.sftp_create_dir_inner(&path);
+                let _ = reply.send(r);
             }
-            WorkerCommand::SftpRemove { reply, .. } => {
-                let _ = reply.send(Err(CoreError::Internal(
-                    "command not implemented yet".into(),
-                )));
+            WorkerCommand::SftpRemove {
+                path,
+                is_dir,
+                reply,
+            } => {
+                let r = self.sftp_remove_inner(&path, is_dir);
+                let _ = reply.send(r);
             }
-            WorkerCommand::SftpRename { reply, .. } => {
-                let _ = reply.send(Err(CoreError::Internal(
-                    "command not implemented yet".into(),
-                )));
+            WorkerCommand::SftpRename { old, new, reply } => {
+                let r = self.sftp_rename_inner(&old, &new);
+                let _ = reply.send(r);
             }
-            WorkerCommand::SftpTransfer { reply, .. } => {
-                let _ = reply.send(Err(CoreError::Internal(
-                    "command not implemented yet".into(),
-                )));
+            WorkerCommand::SftpTransfer {
+                kind,
+                remote,
+                local,
+                progress,
+                reply,
+            } => {
+                // 传输命令在传输中再次到达：拒绝（避免嵌套传输）
+                if self.transferring {
+                    let _ = reply.send(Err(CoreError::Internal(
+                        "transfer already in progress".into(),
+                    )));
+                    return !self.closed;
+                }
+                let r = self.handle_transfer_inner(kind, &remote, &local, progress);
+                let _ = reply.send(r);
             }
             WorkerCommand::ProvideCredential { .. } => {}
         }
@@ -541,6 +822,29 @@ impl Worker {
     }
 }
 
+/// SFTP 操作重试：非阻塞模式下 EAGAIN 最多重试 20 次，间隔 50ms（总计约 1 秒）
+/// 传输循环内的大块读写不走此辅助（自有 2ms 短重试 + 嵌套命令处理）
+fn sftp_retry_worker<T, F>(mut f: F) -> Result<T, ssh2::Error>
+where
+    F: FnMut() -> Result<T, ssh2::Error>,
+{
+    let mut attempts = 0;
+    loop {
+        match f() {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let msg = format!("{e}").to_lowercase();
+                if (msg.contains("would block") || msg.contains("-37")) && attempts < 20 {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,6 +896,25 @@ mod tests {
             err.to_string().contains("no active connection"),
             "错误消息应明确说明无连接，而非骨架阶段的 not implemented 兜底。实际消息: {}",
             err,
+        );
+    }
+
+    #[test]
+    fn test_sftp_read_dir_without_connection_fails() {
+        let (handle, _) = spawn_test_worker();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        handle
+            .send(WorkerCommand::SftpReadDir {
+                path: "/".into(),
+                reply: reply_tx,
+            })
+            .unwrap();
+        let result = reply_rx.blocking_recv().unwrap();
+        let err = result.expect_err("未连接时 SFTP 命令应返回错误");
+        assert!(
+            err.to_string().contains("sftp channel not found")
+                || err.to_string().contains("no active connection"),
+            "错误消息应说明连接/通道缺失，而非骨架阶段的 not implemented 兜底。实际消息: {err}",
         );
     }
 
