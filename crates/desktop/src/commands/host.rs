@@ -78,3 +78,90 @@ pub async fn search_hosts(
     repo.search(&query).map_err(|e| e.to_string())
 }
 
+
+/// ping 结果
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PingResult {
+    pub success: bool,
+    /// 往返延迟（毫秒）；解析失败时 None
+    pub latency_ms: Option<u64>,
+}
+
+/// 从系统 ping 输出中解析往返延迟（毫秒）
+/// Windows: "时间=12ms TTL=64" / "time=12ms TTL=64"；POSIX: "time=12.3 ms"
+/// 解析失败返回 None（不影响 success 判定）
+fn parse_ping_latency(output: &str) -> Option<u64> {
+    let lower = output.to_lowercase();
+    for token in ["time=", "时间=", "time<"] {
+        if let Some(idx) = lower.find(token) {
+            let rest = &lower[idx + token.len()..];
+            let num: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            if let Ok(v) = num.parse::<f64>() {
+                // "time<1ms" 这类以 < 表示的上限按 1 处理
+                if token == "time<" {
+                    return Some(1);
+                }
+                return Some(v.round() as u64);
+            }
+        }
+    }
+    None
+}
+
+/// Ping 主机（诊断工具）：调用系统 ping（Windows -n 1 / 其他 -c 1），解析结果
+/// 定位：诊断用途，不阻塞（spawn_blocking）、不持久化
+#[tauri::command]
+pub async fn ping_host(address: String) -> Result<PingResult, String> {
+    let (success, output) = tokio::task::spawn_blocking(move || {
+        let output = if cfg!(windows) {
+            std::process::Command::new("ping")
+                .args(["-n", "1", &address])
+                .output()
+        } else {
+            std::process::Command::new("ping")
+                .args(["-c", "1", &address])
+                .output()
+        };
+        match output {
+            Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stdout).to_string()),
+            Err(e) => (false, format!("ping spawn failed: {e}")),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(PingResult {
+        success,
+        latency_ms: parse_ping_latency(&output),
+    })
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ping_latency_windows() {
+        assert_eq!(parse_ping_latency("来自 192.168.1.1 的回复: 字节=32 时间=12ms TTL=64"), Some(12));
+    }
+
+    #[test]
+    fn test_parse_ping_latency_posix() {
+        assert_eq!(parse_ping_latency("64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.3 ms"), Some(12));
+    }
+
+    #[test]
+    fn test_parse_ping_latency_upper_bound() {
+        assert_eq!(parse_ping_latency("time<1ms"), Some(1));
+    }
+
+    #[test]
+    fn test_parse_ping_latency_failure() {
+        assert_eq!(parse_ping_latency("请求超时"), None);
+        assert_eq!(parse_ping_latency(""), None);
+    }
+}
+

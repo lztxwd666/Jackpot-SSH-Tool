@@ -80,6 +80,7 @@ pub fn run() {
             commands::delete_host,
             commands::search_hosts,
             commands::approve_host_key,
+            commands::ping_host,
             commands::load_credential,
             commands::save_credential,
             commands::delete_credential,
