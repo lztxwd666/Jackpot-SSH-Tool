@@ -52,13 +52,13 @@ Full spec at `docs/core_idea_zh/` (Chinese) and `docs/core_idea_en/` (English). 
 
 ### Crate Map
 
-| Crate          | Dir                    | Purpose                                                                                | Key Types                                                                                                                                                                                                                                                   |
-| -------------- | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core-common`  | `crates/core-common/`  | Shared types, error enum, ID newtypes (UUID via `define_id!` macro), trait definitions | `CoreError`, `Host`, `HostId`/`SessionId`/`ChannelId`, `ConnectionConfig`, `AuthMethod`, `SessionState`, `ChannelType`, `ChannelState`, `PtySize`, `ReconnectPolicy`, `HostKeyInfo`, `Config`, `HostRepository`, `KnownHostsProvider`, `CredentialProvider` |
-| `core-event`   | `crates/core-event/`   | Immutable event definitions, broadcast channel dispatcher                              | `CoreEvent` (tag-based JSON via `#[serde(tag = "type")]`), `ChannelDispatcher`, `ApplicationEvent`, `SystemEvent`, `ConnectionEvent`, `HostKeyEvent`, `CredentialEvent`, `SessionEvent`, `ChannelEvent`, `HostEvent`                                        |
-| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine (worker message model: keepalive, reconnect, SFTP and transfers all run inside the per-session worker) | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `WorkerCommand`, `WorkerHandle`                                                                                                                     |
-| `core-storage` | `crates/core-storage/` | SQLite + WAL, schema migrations, `Database::execute()` is the sole DB access gate      | `Database`, `SqliteHostRepository`, `SqliteKnownHosts`                                                                                                                                                                                                      |
-| `desktop`      | `crates/desktop/`      | Tauri v2 app, IPC bridge, Vue 3 + xterm.js terminal UI                                 | `AppState`, Tauri commands                                                                                                                                                                                                                                  |
+| Crate          | Dir                    | Purpose                                                                                                                                                              | Key Types                                                                                                                                                                                                                                                   |
+| -------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core-common`  | `crates/core-common/`  | Shared types, error enum, ID newtypes (UUID via `define_id!` macro), trait definitions                                                                               | `CoreError`, `Host`, `HostId`/`SessionId`/`ChannelId`, `ConnectionConfig`, `AuthMethod`, `SessionState`, `ChannelType`, `ChannelState`, `PtySize`, `ReconnectPolicy`, `HostKeyInfo`, `Config`, `HostRepository`, `KnownHostsProvider`, `CredentialProvider` |
+| `core-event`   | `crates/core-event/`   | Immutable event definitions, broadcast channel dispatcher                                                                                                            | `CoreEvent` (tag-based JSON via `#[serde(tag = "type")]`), `ChannelDispatcher`, `ApplicationEvent`, `SystemEvent`, `ConnectionEvent`, `HostKeyEvent`, `CredentialEvent`, `SessionEvent`, `ChannelEvent`, `HostEvent`                                        |
+| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine (worker message model: keepalive, reconnect, SFTP and transfers all run inside the per-session worker) | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `WorkerCommand`, `WorkerHandle`                                                                                                                    |
+| `core-storage` | `crates/core-storage/` | SQLite + WAL, schema migrations, `Database::execute()` is the sole DB access gate                                                                                    | `Database`, `SqliteHostRepository`, `SqliteKnownHosts`                                                                                                                                                                                                      |
+| `desktop`      | `crates/desktop/`      | Tauri v2 app, IPC bridge, Vue 3 + xterm.js terminal UI                                                                                                               | `AppState`, Tauri commands                                                                                                                                                                                                                                  |
 
 ### SSH Connection Pipeline
 
@@ -89,18 +89,18 @@ Add new event variants to `CoreEvent` enum in `core-event/src/event.rs`. Events 
 
 All commands in `desktop/src/commands.rs`. Shared state: `AppState { runtime, channels }` (via `tauri::State`).
 
-| Command                                                     | Purpose                                                   |
-| ----------------------------------------------------------- | --------------------------------------------------------- |
-| `get_app_status`                                            | Returns "running" if CoreRuntime is initialized           |
-| `ping`                                                      | Health check, returns "pong"                              |
-| `list_hosts` / `save_host` / `delete_host` / `search_hosts` | Host CRUD                                                 |
-| `create_session`                                            | Creates Session, returns session_id                       |
-| `connect_session`                                           | Calls `Session::connect()` in spawn_blocking              |
+| Command                                                     | Purpose                                                                      |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `get_app_status`                                            | Returns "running" if CoreRuntime is initialized                              |
+| `ping`                                                      | Health check, returns "pong"                                                 |
+| `list_hosts` / `save_host` / `delete_host` / `search_hosts` | Host CRUD                                                                    |
+| `create_session`                                            | Creates Session, returns session_id                                          |
+| `connect_session`                                           | Calls `Session::connect()` in spawn_blocking                                 |
 | `open_shell`                                                | Opens Shell + SFTP channels, returns channel_id (read loop is worker-driven) |
-| `provide_reconnect_credential`                              | Supplies password/passphrase to the waiting reconnect flow |
-| `terminal_send_input`                                       | Writes bytes to channel                                   |
-| `terminal_resize`                                           | Resizes PTY (cols, rows)                                  |
-| `terminal_close`                                            | Closes session, removes channels                          |
+| `provide_reconnect_credential`                              | Supplies password/passphrase to the waiting reconnect flow                   |
+| `terminal_send_input`                                       | Writes bytes to channel                                                      |
+| `terminal_resize`                                           | Resizes PTY (cols, rows)                                                     |
+| `terminal_close`                                            | Closes session, removes channels                                             |
 
 ### Trait Abstractions
 
@@ -141,6 +141,14 @@ Vue 3 Composition API (`<script setup>`). Single `App.vue` with sidebar (host li
 - Crate names use hyphens in Cargo.toml (`core-common`), Rust code uses underscores (`core_common`)
 - `tracing` for logging; `thiserror` for error types; `serde` with tag-based JSON for events
 - Deps: `ssh2` 0.9, `rusqlite` 0.31 (bundled), `tokio` full, `tauri` 2
+
+## Fix Quality Bar
+
+- Fix defects with the best trade-off of **safety, extensibility, performance and structure** — never the quickest patch. Consider how the fix serves future features and long-term maintenance before committing to it
+- **Avoid over-engineering**: no speculative abstraction, no framework-before-need. The right fix is the smallest change that eliminates the defect's *class*, not just its instance
+- When a fix would duplicate existing logic, that is a signal the shared logic belongs in a shared place — extract and reuse instead of copying
+- A fix that forks an existing primitive (e.g. a second retry loop beside `io_retry`) creates two truths to maintain; prefer one well-placed primitive used by all callers
+- Balance is the goal: a structural fix beats a patch; a few lines in the right place beat a framework
 
 ## UI Language Rules
 

@@ -6,6 +6,7 @@
 
 use crate::channel::{self, ChannelInner};
 use crate::ssh::SshConnection;
+use crate::ssh::io_retry; // 统一的 EAGAIN 重试原语（定义在 ssh::retry，供全部 ssh2 操作共用）
 use core_common::{
     AuthMethod, ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry,
     KnownHostsProvider, ReconnectPolicy, SessionId, SessionState,
@@ -568,12 +569,13 @@ impl Worker {
     }
 
     /// 执行远程命令并返回 stdout（worker 内执行）
+    /// 传入取消标志：断开（cancel 置位）后 exec 各阶段立即失败，避免死连接上无限重试
     fn exec_inner(&self, command: &str) -> CoreResult<String> {
         let conn = self
             .connection
             .as_ref()
             .ok_or_else(|| CoreError::Internal("no active connection".into()))?;
-        conn.exec_command(command)
+        conn.exec_command(command, &self.cancel)
     }
 
     /// 探测并缓存哈希命令（会话级：同一次连接不会换操作系统）
@@ -1211,40 +1213,6 @@ impl Worker {
     }
 }
 
-/// 统一的 EAGAIN 重试：指数退避 2→32ms 封顶；每轮迭代检查取消标志
-/// 错误判定用 is_would_block（错误码匹配 + source 链查找，兜底字符串匹配），
-/// 兼容 ssh2::Error 与包装它的 io::Error（io::Read/io::Write trait 返回 io::Error）
-/// 仅在 worker 线程内调用（sleep 重试不阻塞其他逻辑）
-/// 累计重试时长约 1s 封顶（与旧 sftp_retry 20×50ms 语义一致）：达到上限返回当前
-/// EAGAIN 错误，走调用方统一失败清理路径，避免远端无响应时无限重试
-fn io_retry<T, E>(
-    mut op: impl FnMut() -> Result<T, E>,
-    cancel: &std::sync::atomic::AtomicBool,
-) -> Result<T, E>
-where
-    E: std::error::Error + 'static,
-{
-    const RETRY_CAP: Duration = Duration::from_millis(1000);
-    let start = Instant::now();
-    let mut delay = 2u64;
-    loop {
-        match op() {
-            Ok(v) => return Ok(v),
-            Err(e) => {
-                if crate::ssh::is_would_block(&e)
-                    && !cancel.load(std::sync::atomic::Ordering::Relaxed)
-                    && start.elapsed() < RETRY_CAP
-                {
-                    std::thread::sleep(Duration::from_millis(delay));
-                    delay = (delay * 2).min(32);
-                    continue;
-                }
-                return Err(e);
-            }
-        }
-    }
-}
-
 /// 对 sftp 通道执行一次操作并统一 EAGAIN 重试（io_retry）
 /// 同时借用 raw_channels 与 cancel 两个字段（字段级借用，互不冲突），
 /// 避免经 get_sftp 的整体 &mut self 借用与取消标志检查发生冲突
@@ -1458,71 +1426,4 @@ mod tests {
         assert!(select_hash_command(present).is_none());
     }
 
-    #[test]
-    fn test_io_retry_retries_would_block_then_succeeds() {
-        // EAGAIN 两次后成功：io_retry 应退避重试直至成功
-        let cancel = AtomicBool::new(false);
-        let mut calls = 0;
-        let r = io_retry(
-            || {
-                calls += 1;
-                if calls < 3 {
-                    Err(ssh2::Error::new(
-                        ssh2::ErrorCode::Session(-37),
-                        "Would block waiting for status message",
-                    ))
-                } else {
-                    Ok(42u64)
-                }
-            },
-            &cancel,
-        );
-        assert_eq!(r.unwrap(), 42);
-        assert_eq!(calls, 3);
-    }
-
-    #[test]
-    fn test_io_retry_cancel_stops_retrying() {
-        // 取消标志置位：EAGAIN 不得继续重试，立即返回错误
-        let cancel = AtomicBool::new(true);
-        let mut calls = 0;
-        let r: Result<u64, ssh2::Error> = io_retry(
-            || {
-                calls += 1;
-                Err(ssh2::Error::new(
-                    ssh2::ErrorCode::Session(-37),
-                    "would block",
-                ))
-            },
-            &cancel,
-        );
-        assert!(r.is_err());
-        assert_eq!(calls, 1, "cancel 置位时不得重试");
-    }
-
-    #[test]
-    fn test_io_retry_cap_returns_error() {
-        // 持续 EAGAIN 且无取消：累计约 1s 后必须返回错误，不得无限重试
-        let cancel = AtomicBool::new(false);
-        let start = std::time::Instant::now();
-        let r: Result<u64, ssh2::Error> = io_retry(
-            || {
-                Err(ssh2::Error::new(
-                    ssh2::ErrorCode::Session(-37),
-                    "Would block waiting for status message",
-                ))
-            },
-            &cancel,
-        );
-        assert!(r.is_err());
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(950),
-            "应重试至累计约 1s 上限，实际 {elapsed:?}"
-        );
-        assert!(
-            elapsed < Duration::from_millis(2500),
-            "不应超过上限过久，实际 {elapsed:?}"
-        );
-    }
 }

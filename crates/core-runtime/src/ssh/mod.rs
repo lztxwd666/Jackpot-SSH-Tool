@@ -4,8 +4,10 @@
 pub mod auth;
 pub mod connection;
 pub mod hostkey;
+pub mod retry;
 
 pub use connection::SshConnection;
+pub(crate) use retry::io_retry;
 
 /// 判断错误是否为非阻塞模式下的 EAGAIN（-37 / Would block）
 /// 匹配策略（按稳定性优先级）：

@@ -172,70 +172,38 @@ impl SshConnection {
 
     /// 执行远程命令并返回 stdout
     /// 会话处于非阻塞模式：打开通道、发送请求、读取输出都可能返回 EAGAIN，
-    /// 每个阶段都做重试，不切换全局 blocking flag
-    pub fn exec_command(&self, command: &str) -> CoreResult<String> {
+    /// 三个阶段统一走 io_retry（每阶段独立 1s 累计重试上限，检查取消标志），
+    /// 不切换全局 blocking flag
+    /// cancel：worker 的传输取消标志；断开置位后各阶段立即失败而非等待重试
+    pub fn exec_command(
+        &self,
+        command: &str,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> CoreResult<String> {
         let session = self
             .session
             .as_ref()
             .ok_or_else(|| core_common::CoreError::Internal("no active session".into()))?;
 
-        // EAGAIN 重试采用指数退避：2ms → 4ms → ... → 32ms 封顶
-        let mut backoff = 2u64;
-        let mut sleep_backoff = || {
-            std::thread::sleep(std::time::Duration::from_millis(backoff));
-            backoff = (backoff * 2).min(32);
-        };
-
         // 打开 exec 通道（非阻塞模式下可能 EAGAIN）
-        let mut ch = loop {
-            match session.channel_session() {
-                Ok(ch) => break ch,
-                Err(e) => {
-                    if crate::ssh::is_would_block(&e) {
-                        sleep_backoff();
-                        continue;
-                    }
-                    return Err(core_common::CoreError::Internal(format!(
-                        "open exec channel failed: {e}"
-                    )));
-                }
-            }
-        };
+        let mut ch = super::retry::io_retry(|| session.channel_session(), cancel)
+            .map_err(|e| core_common::CoreError::Internal(format!("open exec channel failed: {e}")))?;
 
         // 发送 exec 请求（非阻塞模式下可能 EAGAIN）
-        loop {
-            match ch.exec(command) {
-                Ok(()) => break,
-                Err(e) => {
-                    if crate::ssh::is_would_block(&e) {
-                        sleep_backoff();
-                        continue;
-                    }
-                    return Err(core_common::CoreError::Internal(format!(
-                        "exec failed: {e}"
-                    )));
-                }
-            }
-        }
+        super::retry::io_retry(|| ch.exec(command), cancel)
+            .map_err(|e| core_common::CoreError::Internal(format!("exec failed: {e}")))?;
 
         // 读取输出（非阻塞模式下可能 EAGAIN）
         // 累积原始字节，最后一次性解码：避免多字节 UTF-8 跨块边界被 from_utf8_lossy 损坏
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
-            match ch.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => raw.extend_from_slice(&buf[..n]),
-                Err(e) => {
-                    if crate::ssh::is_would_block(&e) {
-                        sleep_backoff();
-                        continue;
-                    }
-                    return Err(core_common::CoreError::Internal(format!(
-                        "exec read failed: {e}"
-                    )));
-                }
+            let n = super::retry::io_retry(|| ch.read(&mut buf), cancel)
+                .map_err(|e| core_common::CoreError::Internal(format!("exec read failed: {e}")))?;
+            if n == 0 {
+                break; // EOF
             }
+            raw.extend_from_slice(&buf[..n]);
         }
         let out = String::from_utf8(raw).map_err(|e| {
             core_common::CoreError::Internal(format!("exec output not valid UTF-8: {e}"))
