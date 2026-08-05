@@ -9,6 +9,8 @@ import { t } from '../composables/i18n'
 
 export interface SessionTabState {
   id: string
+  // 按 hostId 关联主机（name 非唯一且可重命名，hostId 才是稳定标识；Task 9 由 hostName 匹配迁移而来）
+  hostId: string
   hostName: string
   sessionId: string
   channelId: string

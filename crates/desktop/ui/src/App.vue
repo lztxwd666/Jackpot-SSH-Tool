@@ -45,11 +45,11 @@ function activeTab() {
   return tabs.value.find(t => t.id === activeTabId.value) ?? null
 }
 
-function openSessionTab(sessionId: string, hostName: string, channelId: string, status: SessionTabState['status'] = 'connected') {
-  // 已存在同主机连接中的标签 → 聚焦（不重复建连）
-  const existing = tabs.value.find(t => t.hostName === hostName && t.status !== 'disconnected')
+function openSessionTab(sessionId: string, hostId: string, hostName: string, channelId: string, status: SessionTabState['status'] = 'connected') {
+  // 已存在同主机连接中的标签 → 聚焦（不重复建连）；按 hostId 匹配（name 非唯一，Task 9 由 hostName 迁移）
+  const existing = tabs.value.find(t => t.hostId === hostId && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return existing.id }
-  const tab: SessionTabState = { id: crypto.randomUUID(), hostName, sessionId, channelId, status }
+  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, sessionId, channelId, status }
   tabs.value.push(tab)
   activeTabId.value = tab.id
   return tab.id
@@ -135,7 +135,7 @@ async function onDeleteHost(host: Host) {
       }).catch(() => {})
     }
     for (const tab of [...tabs.value]) {
-      if (tab.hostName === host.name) closeTab(tab.id)
+      if (tab.hostId === host.id) closeTab(tab.id)
     }
     await loadHosts()
   } catch (e) { console.error('Delete failed:', e) }
@@ -159,8 +159,8 @@ function onSearch(q: string) {
 async function connectHost(host: Host) {
   // 防重入：连接进行中忽略新的双击
   if (connecting.value) return
-  // 同主机已有活动标签：聚焦而非重复建连
-  const existing = tabs.value.find(t => t.hostName === host.name && t.status !== 'disconnected')
+  // 同主机已有活动标签：聚焦而非重复建连（按 hostId 匹配）
+  const existing = tabs.value.find(t => t.hostId === host.id && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return }
   let secret: string | null = null
   if (host.auth_type === 'password') {
@@ -200,7 +200,7 @@ async function doConnectWith(host: Host, secret: string | null) {
     // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
     await applyPendingCredential()
     const cid = await invoke('open_shell', { sessionId: sid }) as string
-    openSessionTab(sid, host.name, cid)
+    openSessionTab(sid, host.id, host.name, cid)
   } catch (e) {
     const isHostKeyError = String(e).includes('host key')
     // 主机密钥场景由 HostKey 事件驱动确认弹窗：不重复报错、不在控制台记录指纹
@@ -280,7 +280,8 @@ async function applyPendingCredential() {
 async function reconnectTab(tab: SessionTabState) {
   if (!tab.sessionId) return
   tab.status = 'reconnecting'
-  const host = hosts.value.find(h => h.name === tab.hostName)
+  // 按 hostId 找回主机（重命名后 hostName 已过期，hostId 才是稳定标识）
+  const host = hosts.value.find(h => h.id === tab.hostId)
   if (!host) {
     // 主机已删除（正常删除流程会连带关闭标签，此处为防御兜底）
     tab.status = 'disconnected'
@@ -609,7 +610,7 @@ onBeforeUnmount(() => {
       <!-- 状态栏：左侧区域底部，展示运行状态（文案走 i18n，M11 修复） -->
       <div class="status-bar">
         <span class="status-badge">{{ t('status.' + status) }}</span>
-        <!-- 后续状态显示预留位 -->
+        <!-- 后续扩展：传输统计/网络状态等显示预留位（当前仅运行状态徽标） -->
       </div>
     </div>
 
