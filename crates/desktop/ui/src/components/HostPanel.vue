@@ -4,35 +4,41 @@
 import { ref } from 'vue'
 import { t, type Locale } from '../composables/i18n'
 
-export interface HostItem {
+// 与后端 list_hosts 返回的 Host 结构一致（前端 host 列表即为完整 Host，不做收窄）
+export interface Host {
   id: string
   name: string
   address: string
   port: number
   username: string
   auth_type: string
+  group_name: string
+  favorite: boolean
+  notes: string
+  created_at: string
+  updated_at: string
 }
 
 const props = defineProps<{
-  hosts: HostItem[]
+  hosts: Host[]
   searchQuery: string
   locale: Locale
 }>()
 
 const emit = defineEmits<{
-  (e: 'connect', host: HostItem): void
-  (e: 'edit', host: HostItem): void
-  (e: 'ping', host: HostItem): void
-  (e: 'delete', host: HostItem): void
+  (e: 'connect', host: Host): void
+  (e: 'edit', host: Host): void
+  (e: 'ping', host: Host): void
+  (e: 'delete', host: Host): void
   (e: 'new'): void
   (e: 'search', query: string): void
   (e: 'locale-change', locale: Locale): void
 }>()
 
 const selectedId = ref<string | null>(null)
-const menu = ref<{ x: number; y: number; host: HostItem } | null>(null)
+const menu = ref<{ x: number; y: number; host: Host } | null>(null)
 
-function onContextMenu(e: MouseEvent, host: HostItem) {
+function onContextMenu(e: MouseEvent, host: Host) {
   e.preventDefault()
   menu.value = { x: e.clientX, y: e.clientY, host }
 }
@@ -83,7 +89,7 @@ function onLocaleChange(e: Event) {
     <div v-if="menu" class="context-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
       <div class="menu-item" @click="pick('connect')">{{ t('common.connect') }}</div>
       <div class="menu-item" @click="pick('edit')">{{ t('common.edit') }}</div>
-      <div class="menu-item" @click="pick('ping')">Ping</div>
+      <div class="menu-item" @click="pick('ping')">{{ t('common.ping') }}</div>
       <div class="menu-item danger" @click="pick('delete')">{{ t('common.delete') }}</div>
     </div>
   </div>

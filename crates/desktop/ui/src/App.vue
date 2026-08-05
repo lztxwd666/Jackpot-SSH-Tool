@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import HostPanel, { type HostItem } from './components/HostPanel.vue'
+import HostPanel, { type Host } from './components/HostPanel.vue'
 import HostFormPanel, { type HostForm } from './components/HostFormPanel.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import ToastStack from './components/ToastStack.vue'
@@ -10,20 +10,6 @@ import SessionTab, { type SessionTabState } from './components/SessionTab.vue'
 import { routeCoreEvent } from './composables/events'
 import { dialogState, closeDialog, confirmDialog, showToast } from './composables/dialog'
 import { t, getLocale, setLocale, type Locale } from './composables/i18n'
-
-interface Host {
-  id: string
-  name: string
-  address: string
-  port: number
-  username: string
-  auth_type: string
-  group_name: string
-  favorite: boolean
-  notes: string
-  created_at: string
-  updated_at: string
-}
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
 interface PingResult {
@@ -40,7 +26,7 @@ const connecting = ref(false)
 const password = ref('')
 const showPasswordPrompt = ref(false)
 // 待确认主机密钥时的连接参数（确认后自动重连）
-const pendingConnectHost = ref<null | { host: HostItem; password: string }>(null)
+const pendingConnectHost = ref<null | { host: Host; password: string }>(null)
 
 // 标签页工作区：多会话标签模型（旧单会话视图已在 Task 6 删除）
 const tabs = ref<SessionTabState[]>([])
@@ -77,11 +63,7 @@ const panelOpen = ref<'none' | 'new' | 'edit'>('none')
 const editingHost = ref<Host | null>(null)
 
 function openNewPanel() { panelOpen.value = 'new'; editingHost.value = null }
-function openEditPanel(host: HostItem) {
-  panelOpen.value = 'edit'
-  // HostItem 是列表项子集，编辑需要完整字段（含分组/收藏/备注）
-  editingHost.value = host as Host
-}
+function openEditPanel(host: Host) { panelOpen.value = 'edit'; editingHost.value = host }
 function cancelPanel() { panelOpen.value = 'none'; editingHost.value = null }
 
 // Host → 表单初始值（编辑时不回显密码；Task B4 接线后按保存勾选回显）
@@ -113,7 +95,7 @@ async function saveHostForm(form: HostForm) {
 }
 
 // 主机删除：确认后删除主机，并连带关闭该主机的标签（凭据删除由 Task B4 接线）
-async function onDeleteHost(host: HostItem) {
+async function onDeleteHost(host: Host) {
   const ok = await confirmDialog(t('hosts.deleteConfirm', { name: host.name }))
   if (!ok) return
   try {
@@ -140,7 +122,7 @@ function onSearch(q: string) {
 }
 
 // 双击直连流程：复用密码弹框/主机密钥确认逻辑，改为创建/聚焦标签
-async function connectHost(host: HostItem) {
+async function connectHost(host: Host) {
   // 防重入：连接进行中忽略新的双击
   if (connecting.value) return
   // 同主机已有活动标签：聚焦而非重复建连
@@ -157,7 +139,7 @@ async function connectHost(host: HostItem) {
 }
 
 // 执行连接：create_session → connect_session → open_shell → 打开标签
-async function doConnectWith(host: HostItem, secret: string | null) {
+async function doConnectWith(host: Host, secret: string | null) {
   connecting.value = true
   try {
     const sid = await invoke('create_session') as string
@@ -230,7 +212,7 @@ async function handleHostKey(kind: string, detail: any) {
 }
 
 // 右键 Ping：调用 ping_host 命令，toast 显示结果
-async function onPing(host: HostItem) {
+async function onPing(host: Host) {
   try {
     const r = await invoke('ping_host', { address: host.address }) as PingResult
     showToast(r.success
