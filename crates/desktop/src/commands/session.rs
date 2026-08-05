@@ -79,11 +79,6 @@ pub async fn open_shell(
     let rt = guard.as_ref().ok_or("runtime not initialized")?;
     let session = rt.get_session(&sid).await.ok_or("session not found")?;
 
-    // 设置默认重连策略（如未设置）；未来可从主机配置读取
-    if session.reconnect_policy().is_none() {
-        session.set_reconnect_policy(core_common::ReconnectPolicy::default());
-    }
-
     // 合并为单次 spawn_blocking：shell 与 sftp 通道共享同一连接锁，串行执行减少线程池往返
     let session_clone = session.clone();
     let (shell_result, sftp_result) = tokio::task::spawn_blocking(move || {
@@ -120,21 +115,6 @@ pub async fn open_shell(
     // keepalive 由 worker do_idle_work 自动承担，无需显式启动
 
     Ok(channel_id.to_string())
-}
-
-
-/// 提供重连凭据（密码或私钥口令），回传给等待中的重连流程
-#[tauri::command]
-pub async fn provide_reconnect_credential(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    secret: String,
-) -> Result<(), String> {
-    let guard = state.runtime.read().await;
-    let rt = guard.as_ref().ok_or("runtime not initialized")?;
-    let sid = SessionId::parse(&session_id)?;
-    let session = rt.get_session(&sid).await.ok_or("session not found")?;
-    session.provide_credential(secret).map_err(|e| e.to_string())
 }
 
 

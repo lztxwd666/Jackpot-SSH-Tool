@@ -1,9 +1,9 @@
 //! Session 生命周期管理模块
 //! Session 是比 SshConnection 更高层的抽象，拥有连接和通道列表
-//! 支持断线重连，自身不持有 ConnectionConfig（由外部调用 connect 时传入）
+//! 自身不持有 ConnectionConfig（由外部调用 connect 时传入）
 //! Stage 6: 每 Session 一个 worker 线程（Active Object 模式），SSH 操作经 mpsc 串行执行
 
-use core_common::{ConnectionConfig, CoreError, CoreResult, KnownHostsProvider, ReconnectPolicy, SessionId, SessionState};
+use core_common::{ConnectionConfig, CoreError, CoreResult, KnownHostsProvider, SessionId, SessionState};
 use core_event::EventDispatcher;
 use core_event::event::{CoreEvent, SessionEvent};
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use crate::channel::Channel;
 use crate::worker::{self, WorkerHandle, WorkerCommand};
 
 /// SSH 交互 Session，用于一个逻辑会话的完整生命周期管理
-/// 内部使用 RwLock 提供内部可变性（状态/策略/known_hosts 的原子读），所有公开方法接收 &self
+/// 内部使用 RwLock 提供内部可变性（状态/known_hosts 的原子读），所有公开方法接收 &self
 /// state 使用 std::sync::RwLock 以兼容 async 和 blocking 两种调用上下文
 /// Stage 6: 引入 worker 线程，所有 ssh2 操作经 WorkerHandle 投递到单线程串行执行
 pub struct Session {
@@ -24,7 +24,6 @@ pub struct Session {
     worker: Arc<WorkerHandle>,
     dispatcher: Arc<dyn EventDispatcher>,
     known_hosts: std::sync::RwLock<Option<Arc<dyn KnownHostsProvider>>>,
-    reconnect_policy: std::sync::RwLock<Option<ReconnectPolicy>>,
 }
 
 impl Session {
@@ -39,7 +38,6 @@ impl Session {
             worker: Arc::new(WorkerHandle::new(tx)),
             dispatcher: dispatcher.clone(),
             known_hosts: std::sync::RwLock::new(None),
-            reconnect_policy: std::sync::RwLock::new(None),
         });
 
         // 启动 worker 线程（持 dispatcher 与共享状态；不持 Session 引用，避免循环引用）
@@ -67,27 +65,7 @@ impl Session {
         crate::rw_read(&self.known_hosts).clone()
     }
 
-    /// 设置重连策略
-    /// 本地保留一份供外部查询（desktop 判断"未设置则设默认"），并投递命令同步 worker 侧副本
-    pub fn set_reconnect_policy(&self, policy: ReconnectPolicy) {
-        *crate::rw_write(&self.reconnect_policy) = Some(policy.clone());
-        let _ = self
-            .worker
-            .send(WorkerCommand::SetReconnectPolicy { policy: Some(policy) });
-    }
-
-    /// 获取重连策略的克隆
-    pub fn reconnect_policy(&self) -> Option<ReconnectPolicy> {
-        crate::rw_read(&self.reconnect_policy).clone()
-    }
-
-    /// 向等待中的重连流程提供凭据（密码或私钥口令）
-    pub fn provide_credential(&self, secret: String) -> CoreResult<()> {
-        self.worker.send(WorkerCommand::ProvideCredential { secret })
-    }
-
     /// 建立 SSH 连接（阻塞至完成；内部投递 Connect 命令并等待回执）
-    /// 重连用配置骨架（profile_from_config）由 worker 在 connect_inner 成功后自行保存
     pub fn connect(
         &self,
         config: ConnectionConfig,
