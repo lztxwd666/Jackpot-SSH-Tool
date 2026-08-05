@@ -2,12 +2,14 @@
 //! 定义前端可调用的命令函数和共享状态结构
 //! 按职责拆分为子模块：local（本地文件）、host（主机）、session（会话/终端）、sftp（文件传输）
 
+pub mod credential;
 pub mod host;
 pub mod local;
 pub mod session;
 pub mod sftp;
 
 // 统一 re-export：lib.rs 与前端通过 commands::xxx 引用所有命令
+pub use credential::*;
 pub use host::*;
 pub use local::*;
 pub use session::*;

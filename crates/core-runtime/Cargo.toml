@@ -12,3 +12,5 @@ core-storage = { path = "../core-storage" }
 ssh2 = "0.9"
 base64 = "0.22"
 sha2.workspace = true
+# v3 无默认 feature：必须显式开启各平台原生凭据库，否则默认回落为 mock
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

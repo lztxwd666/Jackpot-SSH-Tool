@@ -10,7 +10,7 @@ pub mod knownhosts;
 pub mod ssh;
 
 pub use config::{Config, DefaultConfig};
-pub use credential::CredentialProvider;
+pub use credential::{Credential, CredentialKind, CredentialProvider};
 pub use error::{CoreError, CoreResult};
 pub use host::{Host, HostRepository};
 pub use id::{ChannelId, ConnectionId, HostId, SessionId};

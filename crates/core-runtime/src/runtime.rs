@@ -2,6 +2,7 @@
 //! CoreRuntime 是应用的中央调度器，管理整个 crate 栈的生命周期和资源
 
 use core_common::config::Config;
+use core_common::credential::CredentialProvider;
 use core_common::host::HostRepository;
 use core_common::knownhosts::KnownHostsProvider;
 use core_common::{CoreResult, SessionId};
@@ -12,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::credential::KeyringCredentialProvider;
 use crate::Session;
 
 /// 运行时核心结构
@@ -23,6 +25,7 @@ pub struct CoreRuntime {
     running: RwLock<bool>,
     known_hosts: RwLock<Option<Arc<dyn KnownHostsProvider>>>,
     host_repo: RwLock<Option<Arc<dyn HostRepository>>>,
+    credential_provider: RwLock<Option<Arc<dyn CredentialProvider>>>,
     sessions: RwLock<HashMap<SessionId, Arc<Session>>>,
 }
 
@@ -38,6 +41,7 @@ impl CoreRuntime {
             running: RwLock::new(false),
             known_hosts: RwLock::new(None),
             host_repo: RwLock::new(None),
+            credential_provider: RwLock::new(None),
             sessions: RwLock::new(HashMap::new()),
         }
     }
@@ -84,6 +88,9 @@ impl CoreRuntime {
         let host_repo: Arc<dyn HostRepository> =
             Arc::new(core_storage::SqliteHostRepository::new(db_arc.clone()));
 
+        let credential_provider: Arc<dyn CredentialProvider> =
+            Arc::new(KeyringCredentialProvider::new());
+
         {
             let mut db_lock = self.db.write().await;
             *db_lock = Some(db_arc.clone());
@@ -95,6 +102,10 @@ impl CoreRuntime {
         {
             let mut hr_lock = self.host_repo.write().await;
             *hr_lock = Some(host_repo);
+        }
+        {
+            let mut cp_lock = self.credential_provider.write().await;
+            *cp_lock = Some(credential_provider);
         }
 
         self.dispatcher
@@ -112,6 +123,11 @@ impl CoreRuntime {
     /// 获取 HostRepository 的引用（仅在 start() 后有效）
     pub async fn host_repo(&self) -> Option<Arc<dyn HostRepository>> {
         self.host_repo.read().await.clone()
+    }
+
+    /// 获取 CredentialProvider 的引用（仅在 start() 后有效）
+    pub async fn credential_provider(&self) -> Option<Arc<dyn CredentialProvider>> {
+        self.credential_provider.read().await.clone()
     }
 
     /// 创建一个新的 Session 并注册到会话管理器中
@@ -150,6 +166,10 @@ impl CoreRuntime {
         {
             let mut kh_lock = self.known_hosts.write().await;
             *kh_lock = None;
+        }
+        {
+            let mut cp_lock = self.credential_provider.write().await;
+            *cp_lock = None;
         }
 
         // 再关闭数据库

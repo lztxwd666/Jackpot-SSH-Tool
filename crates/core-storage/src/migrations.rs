@@ -4,7 +4,7 @@
 use core_common::CoreResult;
 
 /// 当前数据库 schema 版本号
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// V1 初始 schema：hosts 表存储 SSH 主机信息，config 表存储键值对配置
 /// version 设为主键，防止重复执行迁移时插入重复版本行
@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS known_hosts (
 );
 ";
 
+/// V3：hosts 表增加 save_password 列（保存密码勾选标志；密码本体在 OS 凭据库，绝不在 SQLite）
+const MIGRATION_V3: &str = "
+ALTER TABLE hosts ADD COLUMN save_password INTEGER NOT NULL DEFAULT 0;
+";
+
 /// 运行所有必要的迁移脚本，将 schema 从当前版本升级到 SCHEMA_VERSION
 /// 仅在数据库版本低于目标版本时才执行迁移
 pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
@@ -73,10 +78,21 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
-            [SCHEMA_VERSION],
+            [2],
         )
         .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tracing::info!("database migrated to version 2");
+    }
+
+    if current_version < 3 {
+        conn.execute_batch(MIGRATION_V3)
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
+            [SCHEMA_VERSION],
+        )
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        tracing::info!("database migrated to version 3");
     }
 
     Ok(())

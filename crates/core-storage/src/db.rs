@@ -95,7 +95,7 @@ mod tests {
                     .map_err(|e| core_common::CoreError::Storage(Box::new(e)))
             })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         db.close().unwrap();
         std::fs::remove_dir_all(&dir).ok();
