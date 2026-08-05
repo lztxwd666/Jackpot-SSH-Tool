@@ -112,13 +112,7 @@ pub async fn open_shell(
         }
     }
 
-    // 启动心跳保活（每 30 秒发送一次 keepalive 请求），并监督任务退出
-    let kh_handle = core_runtime::spawn_keepalive(session, 30);
-    tokio::spawn(async move {
-        if let Err(e) = kh_handle.await {
-            tracing::error!(%channel_id, error = %e, "keepalive task panicked");
-        }
-    });
+    // keepalive 由 worker do_idle_work 自动承担，无需显式启动
 
     Ok(channel_id.to_string())
 }
