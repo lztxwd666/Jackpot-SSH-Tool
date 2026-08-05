@@ -244,6 +244,8 @@ impl Worker {
         match conn.connect() {
             Ok(()) => {
                 self.connection = Some(conn);
+                // 复位传输取消标志：上一次断开置位后，新连接上的传输不得被残留标志误取消
+                self.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
                 self.write_state(SessionState::Connected)?;
                 self.dispatch(CoreEvent::Session(SessionEvent::Connected {
                     session_id: self.session_id(),
@@ -258,7 +260,11 @@ impl Worker {
     }
 
     /// 断开 SSH 连接（worker 内执行），状态转为 Disconnected（可重连）
+    /// 断开即断：置位取消标志，传输循环（transfer_*_inner）在下一个 chunk 检查点立即中止，
+    /// 嵌套 Disconnect/Close 与正常断开共用此路径
     fn disconnect_inner(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.close_all_channels_inner();
         if let Some(mut conn) = self.connection.take() {
             let _ = conn.disconnect();
@@ -545,7 +551,8 @@ impl Worker {
             // 嵌套处理已到达命令（断开/输入/列目录等立即响应）
             self.drain_nested_commands();
             if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                break; // 取消：走统一失败清理
+                // 取消（断开/Close）：显式错误走统一失败清理，避免 total==0 时误报成功
+                return Err(CoreError::Internal("transfer cancelled".into()));
             }
             match file.read(&mut chunk) {
                 Ok(0) => break,
@@ -601,7 +608,8 @@ impl Worker {
                 // 嵌套处理已到达命令（断开/输入/列目录等立即响应）
                 self.drain_nested_commands();
                 if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    break; // 取消：走统一失败清理
+                    // 取消（断开/Close）：显式错误走统一失败清理，避免 total==0 时误报成功
+                    return Err(CoreError::Internal("transfer cancelled".into()));
                 }
                 let n = local_file.read(&mut chunk).map_err(|e| {
                     CoreError::Internal(format!("local read failed: {e}"))
