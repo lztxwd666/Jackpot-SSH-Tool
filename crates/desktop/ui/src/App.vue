@@ -7,6 +7,8 @@ import LocalFileTree from './components/LocalFileTree.vue'
 import RemoteFileTree from './components/RemoteFileTree.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import ToastStack from './components/ToastStack.vue'
+import SessionTab, { type SessionTabState } from './components/SessionTab.vue'
+import { routeCoreEvent } from './composables/events'
 import { dialogState, closeDialog, confirmDialog, showToast } from './composables/dialog'
 import { t, getLocale, setLocale, type Locale } from './composables/i18n'
 
@@ -47,11 +49,40 @@ const channelId = ref('')
 const sessionId = ref('')
 const password = ref('')
 const showPasswordPrompt = ref(false)
-// 重连交互状态：重连进行中 / 传输锁定时远程文件树锁定
-const reconnecting = ref(false)
+// 传输锁定时远程文件树锁定
 const remoteTreeLocked = ref(false)
 // 待确认主机密钥时的连接参数（确认后自动重连）
 const pendingConnect = ref<null | { host: string; port: number; username: string; authType: string; password: string }>(null)
+
+// 标签页工作区骨架：多会话标签模型（Task B2 接线 openSessionTab，旧单会话流程暂并存）
+const tabs = ref<SessionTabState[]>([])
+const activeTabId = ref<string | null>(null)
+
+function activeTab() {
+  return tabs.value.find(t => t.id === activeTabId.value) ?? null
+}
+
+function openSessionTab(sessionId: string, hostName: string, channelId: string, status: SessionTabState['status'] = 'connected') {
+  // 已存在同主机连接中的标签 → 聚焦（不重复建连）
+  const existing = tabs.value.find(t => t.hostName === hostName && t.status !== 'disconnected')
+  if (existing) { activeTabId.value = existing.id; return existing.id }
+  const tab: SessionTabState = { id: crypto.randomUUID(), hostName, sessionId, channelId, status }
+  tabs.value.push(tab)
+  activeTabId.value = tab.id
+  return tab.id
+}
+
+function closeTab(tabId: string) {
+  const tab = tabs.value.find(t => t.id === tabId)
+  if (!tab) return
+  if (tab.sessionId) {
+    invoke('terminal_close', { sessionId: tab.sessionId }).catch(() => {})
+  }
+  tabs.value = tabs.value.filter(t => t.id !== tabId)
+  if (activeTabId.value === tabId) {
+    activeTabId.value = tabs.value.length ? tabs.value[tabs.value.length - 1].id : null
+  }
+}
 // SFTP 相关状态
 const localCurrentDir = ref('')       // 本地文件树当前目录（下载默认目标）
 const remoteCurrentDir = ref('/')     // 远程文件树当前目录（上传默认目标）
@@ -214,38 +245,6 @@ async function disconnect() {
   connected.value = false; channelId.value = ''; sessionId.value = ''
 }
 
-// 重连成功后自动重建通道（open_shell 连带：Shell + SFTP + keepalive 由 worker 空闲工作承担）
-async function rebuildChannels() {
-  if (!sessionId.value) return
-  try {
-    const cid = await invoke('open_shell', { sessionId: sessionId.value }) as string
-    channelId.value = cid
-    connected.value = true
-    showToast(t('toast.reconnected'), 'success', 4000)
-  } catch (e) {
-    showToast(t('toast.reconnectFailed', { err: String(e) }), 'error', 5000)
-  }
-}
-
-// 重连凭据弹框（复用现有 modal 样式；取消不调用 provide_reconnect_credential，60s 超时兜底）
-const credentialPrompt = ref<null | { sessionId: string; kind: string; host: string }>(null)
-const credentialSecret = ref('')
-function showReconnectCredential(d: any) {
-  credentialPrompt.value = { sessionId: d.session_id, kind: d.auth_kind, host: d.host }
-  credentialSecret.value = ''
-}
-async function submitCredential() {
-  if (!credentialPrompt.value) return
-  try {
-    await invoke('provide_reconnect_credential', {
-      sessionId: credentialPrompt.value.sessionId,
-      secret: credentialSecret.value,
-    })
-  } catch (e) { showToast(String(e), 'error', 5000) }
-  credentialPrompt.value = null
-  credentialSecret.value = ''
-}
-
 // SFTP 操作
 // 下载目标优先级：拖拽目标目录 > 本地文件树当前目录 > 用户主目录\Downloads > 用户主目录
 // 注意：C:\Users 根目录因 UAC 权限限制不可写，切勿作为默认目标
@@ -343,34 +342,26 @@ onMounted(async () => {
   try { homeDir.value = await invoke('get_home_dir') } catch (_) {}
   unlistenCore = await listen<string>('core-event', (event) => {
     const parsed = JSON.parse(event.payload)
+    // 非会话级事件（不带 session_id）：仍在本地处理
     if (parsed.type === 'Host') loadHosts()
     // 主机密钥确认流程：Unknown（首次）/ Changed（变更）
     if (parsed.type === 'HostKey' && (parsed.payload?.kind === 'Unknown' || parsed.payload?.kind === 'Changed')) {
       handleHostKey(parsed.payload.kind, parsed.payload?.detail)
     }
-    // 重连状态机：Reconnecting / Reconnected / ReconnectFailed
-    if (parsed.type === 'Session') {
-      const kind = parsed.payload?.kind
-      if (kind === 'Reconnecting') {
-        reconnecting.value = true
-      } else if (kind === 'Reconnected') {
-        reconnecting.value = false
-        rebuildChannels()
-      } else if (kind === 'ReconnectFailed') {
-        reconnecting.value = false
-        showToast(t('toast.reconnectFailed', { err: parsed.payload?.detail?.reason || '' }), 'error', 5000)
-      }
-    }
-    // 重连需要用户提供凭据（密码或私钥口令）
-    if (parsed.type === 'Credential' && parsed.payload?.kind === 'Required') {
-      const d = parsed.payload.detail
-      showReconnectCredential(d)
-    }
-    // 传输窗口标记：Locked 锁远程文件树，Unlocked 解锁
-    if (parsed.type === 'Transfer') {
-      const kind = parsed.payload?.kind
-      remoteTreeLocked.value = kind === 'Locked'
-    }
+    // 会话级事件：按 session_id 路由到对应标签
+    routeCoreEvent(event.payload, {
+      onSession: (sid, kind, detail) => {
+        const tab = tabs.value.find(t => t.sessionId === sid)
+        if (!tab) return
+        if (kind === 'Connected') { tab.status = 'connected'; tab.error = undefined }
+        // Disconnected/Connecting 等状态：Task B3 完整接线（本任务先建骨架）
+      },
+      onTransfer: (sid, kind) => {
+        // 旧单会话视图沿用：传输窗口标记锁定远程文件树
+        // Task B3 按 tab 粒度接线传输锁状态
+        remoteTreeLocked.value = kind === 'Locked'
+      },
+    })
   })
   // 传输进度事件（流式下载/上传）
   // 与后端 commands/sftp.rs 的 TransferProgress 结构对应
@@ -391,30 +382,47 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-layout">
-    <!-- 本地文件树 -->
-    <div v-if="connected" class="panel" style="width:180px; min-width:180px;">
-      <LocalFileTree
-        :refreshKey="localRefreshKey"
-        @download="downloadFile"
-        @current-dir="(p: string) => localCurrentDir = p"
-        @upload-request="uploadFromLocal"
-      />
-    </div>
+    <!-- 左侧区域：标签栏 + 工作区 + 状态栏（右侧主机栏完全独立） -->
+    <div class="left-area">
+      <!-- 标签栏：flex-wrap 换行展示，不做横向滚动 -->
+      <div class="tab-bar">
+        <div v-for="tab in tabs" :key="tab.id" class="tab" :class="{ active: tab.id === activeTabId }" @click="activeTabId = tab.id">
+          <span class="tab-dot" :class="tab.status"></span>
+          <span class="tab-name">{{ tab.hostName }}</span>
+          <span class="tab-close" @click.stop="closeTab(tab.id)">×</span>
+        </div>
+      </div>
+      <div class="tab-content">
+        <!-- 新标签骨架：按 session_id 路由，v-show 切换保持各标签组件状态 -->
+        <template v-for="tab in tabs" :key="tab.id">
+          <SessionTab v-show="tab.id === activeTabId" :tab="tab" @close="closeTab(tab.id)" />
+        </template>
+        <!-- 旧单会话视图（Task 6 迁移到标签后删除）：无标签时沿用旧连接流程 -->
+        <template v-if="tabs.length === 0">
+        <!-- 本地文件树 -->
+        <div v-if="connected" class="panel" style="width:180px; min-width:180px;">
+          <LocalFileTree
+            :refreshKey="localRefreshKey"
+            @download="downloadFile"
+            @current-dir="(p: string) => localCurrentDir = p"
+            @upload-request="uploadFromLocal"
+          />
+        </div>
 
-    <!-- 远程文件树 -->
-    <div v-if="connected" class="panel" style="width:180px; min-width:180px;">
-      <RemoteFileTree
-        :sessionId="sessionId"
-        :refreshKey="remoteRefreshKey"
-        :locked="remoteTreeLocked"
-        @download="downloadFile"
-        @upload="uploadFile"
-        @current-dir="(p: string) => remoteCurrentDir = p"
-      />
-    </div>
+        <!-- 远程文件树 -->
+        <div v-if="connected" class="panel" style="width:180px; min-width:180px;">
+          <RemoteFileTree
+            :sessionId="sessionId"
+            :refreshKey="remoteRefreshKey"
+            :locked="remoteTreeLocked"
+            @download="downloadFile"
+            @upload="uploadFile"
+            @current-dir="(p: string) => remoteCurrentDir = p"
+          />
+        </div>
 
-    <!-- 终端 -->
-    <main class="main-panel">
+        <!-- 终端 -->
+        <main class="main-panel">
       <template v-if="connected && channelId">
         <div class="terminal-wrapper">
           <div class="terminal-header">
@@ -423,7 +431,6 @@ onBeforeUnmount(() => {
             </span>
             <button class="btn btn-danger" @click="disconnect">{{ t('common.disconnect') }}</button>
           </div>
-          <div v-if="reconnecting" class="reconnect-banner">{{ t('reconnect.inProgress') }}</div>
           <Terminal :channelId="channelId" :key="channelId" />
         </div>
       </template>
@@ -472,9 +479,17 @@ onBeforeUnmount(() => {
       <template v-else>
         <div class="placeholder"><p>{{ t('hosts.selectHint') }}</p></div>
       </template>
-    </main>
+        </main>
+        </template>
+      </div>
+      <!-- 状态栏：左侧区域底部，展示运行状态（后续会话信息由 Task B3 完善） -->
+      <div class="status-bar">
+        <span class="status-badge">{{ status }}</span>
+        <!-- 后续状态显示预留位 -->
+      </div>
+    </div>
 
-    <!-- 主机列表 -->
+    <!-- 右侧主机栏（完整独立，Task B2 重构为 HostPanel） -->
     <aside class="sidebar">
       <div class="sidebar-header"><h2>{{ t('hosts.title') }}</h2><button class="btn btn-primary" @click="newHost">{{ t('hosts.add') }}</button></div>
       <div class="search-bar"><input v-model="searchQuery" type="text" :placeholder="t('hosts.searchPlaceholder')" @input="doSearch" /></div>
@@ -489,7 +504,6 @@ onBeforeUnmount(() => {
           <option value="en">English</option>
           <option value="zh">中文</option>
         </select>
-        <span class="status-badge">{{ status }}</span>
       </div>
     </aside>
 
@@ -533,20 +547,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- 重连凭据弹窗（取消不调用 provide_reconnect_credential，60s 超时兜底） -->
-    <div v-if="credentialPrompt" class="modal-overlay" @click.self="credentialPrompt = null">
-      <div class="modal">
-        <h3>{{ credentialPrompt.kind === 'private_key_passphrase' ? t('reconnect.passphraseTitle') : t('reconnect.passwordTitle') }}</h3>
-        <p>{{ t('reconnect.connectingTo', { user: selectedHost?.username || '', host: credentialPrompt.host }) }}</p>
-        <form @submit.prevent="submitCredential">
-          <input v-model="credentialSecret" type="password" autofocus required />
-          <div class="modal-actions">
-            <button type="submit" class="btn btn-primary">{{ t('common.ok') }}</button>
-            <button type="button" class="btn" @click="credentialPrompt = null">{{ t('common.cancel') }}</button>
-          </div>
-        </form>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -612,10 +612,20 @@ onBeforeUnmount(() => {
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-text); font-weight: 500; }
-.reconnect-banner {
-  padding: 0.3rem 0.8rem; font-size: 0.75rem; text-align: center;
-  background: rgba(210, 153, 34, 0.15); color: #d29922; flex-shrink: 0;
-}
+
+/* 标签页工作区布局：左侧区域三行（标签栏/工作区/状态栏），右侧主机栏独立 */
+.left-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 0.2rem 0.2rem 0; gap: 0.2rem; }
+.tab { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
+.tab.active { border-bottom-color: var(--color-background); background: var(--color-background-mute); }
+.tab-dot { width: 8px; height: 8px; border-radius: 50%; }
+.tab-dot.connected { background: hsla(160, 100%, 37%, 1); }
+.tab-dot.connecting, .tab-dot.reconnecting { background: #d29922; }
+.tab-dot.disconnected { background: #e5534b; }
+.tab-close { color: var(--color-text); opacity: 0.6; cursor: pointer; }
+.tab-close:hover { opacity: 1; }
+.tab-content { flex: 1; display: flex; overflow: hidden; }
+.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal { background: var(--color-background); border: 1px solid var(--color-border); border-radius: 8px; padding: 1.5rem; min-width: 300px; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }
