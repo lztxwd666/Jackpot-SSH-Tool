@@ -28,8 +28,9 @@ const showPasswordPrompt = ref(false)
 const promptHost = ref<Host | null>(null)
 // 密码弹框的 Promise resolver（同一时间最多一个挂起的弹框）
 let promptResolve: ((secret: string | null) => void) | null = null
-// 待确认主机密钥时的连接参数（确认后自动重连）
-const pendingConnectHost = ref<null | { host: Host; password: string }>(null)
+// 待确认主机密钥时的连接参数（确认后自动重连/重连续跑）
+// reconnectTabId：手动重连场景携带标签上下文，密钥确认后更新现有标签而非新建
+const pendingConnectHost = ref<null | { host: Host; password: string; reconnectTabId?: string }>(null)
 
 // 标签页工作区：多会话标签模型（旧单会话视图已在 Task 6 删除）
 const tabs = ref<SessionTabState[]>([])
@@ -224,6 +225,14 @@ async function reconnectTab(tab: SessionTabState) {
       return
     }
   }
+  // 保存连接参数：主机密钥确认后自动重连需要（携带重连上下文，确认后更新现有标签）
+  pendingConnectHost.value = { host, password: secret ?? '', reconnectTabId: tab.id }
+  await doReconnectWith(host, secret, tab)
+}
+
+// 执行重连连接序列：connect_session → open_shell → 更新现有标签（不新建标签）
+// 与 doConnectWith 的区别：不复用 openSessionTab，直接更新 tab 的 channelId/status
+async function doReconnectWith(host: Host, secret: string | null, tab: SessionTabState) {
   connecting.value = true
   try {
     await invoke('connect_session', {
@@ -233,45 +242,64 @@ async function reconnectTab(tab: SessionTabState) {
     })
     // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
     password.value = ''
+    pendingConnectHost.value = null
     const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
     // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
     tab.channelId = cid
     tab.status = 'connected'
     tab.error = undefined
   } catch (e) {
-    tab.status = 'disconnected'
-    tab.error = String(e)
-    showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
+    const isHostKeyError = String(e).includes('host key')
+    // 主机密钥场景由 HostKey 事件驱动确认弹窗：保留 pendingConnectHost 与断开原因，
+    // 不重复报错、不改状态（确认/拒绝后的终态由 handleHostKey 决定）
+    if (!isHostKeyError) {
+      pendingConnectHost.value = null
+      tab.status = 'disconnected'
+      tab.error = String(e)
+      showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
+    }
   } finally {
     connecting.value = false
   }
 }
 
 // 主机密钥确认：Unknown（首次连接）/ Changed（密钥变更，可能 MITM）
+// 手动重连场景（pendingConnectHost.reconnectTabId）：确认后继续重连流程（更新现有标签），拒绝则恢复断连状态
 async function handleHostKey(kind: string, detail: any) {
   const host = detail?.host
   const fingerprint = kind === 'Changed' ? detail?.new_fingerprint : detail?.fingerprint
   const oldFp = detail?.old_fingerprint
   if (!host || !fingerprint || !pendingConnectHost.value) return
   const pc = pendingConnectHost.value
+  // 重连上下文的目标标签（标签可能已被用户关闭，允许为空则退回首次连接语义）
+  const targetTab = pc.reconnectTabId
+    ? tabs.value.find(t => t.id === pc.reconnectTabId) ?? null
+    : null
   const msg = kind === 'Changed'
     ? t('hostkey.changed', { host, old: oldFp ?? '', new: fingerprint })
     : t('hostkey.unknown', { host, fp: fingerprint })
   const ok = await confirmDialog(msg, kind === 'Changed' ? t('hostkey.changedTitle') : t('hostkey.confirmTitle'))
   if (!ok) {
-    // 拒绝信任：清理待确认参数与密码
+    // 拒绝信任：清理待确认参数与密码；重连场景恢复断连状态（原断开原因保留）
     pendingConnectHost.value = null
     password.value = ''
+    if (targetTab) targetTab.status = 'disconnected'
     return
   }
   try {
     await invoke('approve_host_key', { host, port: pc.host.port, fingerprint })
-    // 批准后自动重连
+    // 批准后自动重连：重连场景继续 doReconnectWith（更新现有标签），首次连接走 doConnectWith
     pendingConnectHost.value = null
+    if (targetTab) {
+      await doReconnectWith(pc.host, pc.password || null, targetTab)
+      return
+    }
     await doConnectWith(pc.host, pc.password || null)
   } catch (e) {
     showToast(t('hostkey.saveFailed', { err: String(e) }), 'error', 5000)
     pendingConnectHost.value = null
+    // 密钥保存失败：重连场景同样恢复断连状态（避免卡在 reconnecting）
+    if (targetTab) targetTab.status = 'disconnected'
   }
 }
 
