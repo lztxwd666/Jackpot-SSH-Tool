@@ -86,8 +86,11 @@ pub enum SessionEvent {
     },
     /// 连接成功，可以打开 Channel
     Connected { session_id: SessionId },
-    /// 连接已断开（可重连，重连由用户手动发起）
-    Disconnected { session_id: SessionId },
+    /// 连接已断开（可重连，重连由用户手动发起）；reason 为断开原因（异常断开时供 UI 展示）
+    Disconnected {
+        session_id: SessionId,
+        reason: String,
+    },
     /// Session 永久关闭，不可再连接
     Closed { session_id: SessionId },
 }
@@ -228,6 +231,21 @@ mod tests {
         assert!(matches!(
             parsed,
             CoreEvent::Transfer(TransferEvent::Unlocked { .. })
+        ));
+    }
+
+    #[test]
+    fn test_disconnected_with_reason_roundtrip() {
+        let event = CoreEvent::Session(SessionEvent::Disconnected {
+            session_id: SessionId::new(),
+            reason: "channel write failed: test".into(),
+        });
+        let json = serde_json::to_string(&event).unwrap();
+        let parsed: CoreEvent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed,
+            CoreEvent::Session(SessionEvent::Disconnected { reason, .. })
+            if reason == "channel write failed: test"
         ));
     }
 

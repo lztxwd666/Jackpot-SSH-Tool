@@ -309,9 +309,9 @@ impl Worker {
     }
 
     /// 断开 SSH 连接（worker 内执行），状态转为 Disconnected（可重连）
-    /// 断开即断：置位取消标志，传输循环（transfer_*_inner）在下一个 chunk 检查点立即中止，
-    /// 嵌套 Disconnect/Close 与正常断开共用此路径
-    fn disconnect_inner(&mut self) {
+    /// 断开即断：置位取消标志，传输循环（transfer_*_inner）在下一个 chunk 检查点立即中止
+    /// reason：断开原因（异常断开时随 Disconnected 事件广播，供 UI 展示）
+    fn disconnect_inner(&mut self, reason: &str) {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.close_all_channels_inner();
@@ -321,6 +321,7 @@ impl Worker {
         if self.write_state(SessionState::Disconnected).is_ok() {
             self.dispatch(CoreEvent::Session(SessionEvent::Disconnected {
                 session_id: self.session_id(),
+                reason: reason.to_string(),
             }));
         }
     }
@@ -431,7 +432,10 @@ impl Worker {
                     match io_retry(|| ch.write(&data[written..]), &self.cancel) {
                         Ok(n) => written += n,
                         Err(e) => {
-                            return Err(CoreError::Internal(format!("channel write failed: {e}")));
+                            // 写失败（连接已死）：主动断开并广播（原因供 UI 展示）
+                            let msg = format!("channel write failed: {e}");
+                            self.disconnect_inner(&msg);
+                            return Err(CoreError::Internal(msg));
                         }
                     }
                 }
@@ -765,10 +769,10 @@ impl Worker {
                 let _ = reply.send(r);
             }
             WorkerCommand::Disconnect => {
-                self.disconnect_inner();
+                self.disconnect_inner("disconnected by user");
             }
             WorkerCommand::Close => {
-                self.disconnect_inner();
+                self.disconnect_inner("session closed");
                 self.closed = true;
                 let _ = self.write_state(SessionState::Closed);
                 self.dispatch(CoreEvent::Session(SessionEvent::Closed {
@@ -878,7 +882,7 @@ impl Worker {
                 }
                 Some(Err(e)) => {
                     tracing::warn!(session_id = ?self.session_id(), error = %e, "keepalive failed, disconnecting");
-                    self.disconnect_inner();
+                    self.disconnect_inner(&format!("keepalive failed: {e}"));
                     return;
                 }
                 None => {}
@@ -902,7 +906,7 @@ impl Worker {
         };
         let mut buf = [0u8; 4096];
         match ch.read(&mut buf) {
-            Ok(0) | Err(_) => Ok(()), // EAGAIN 或无数据：无事
+            Ok(0) => Ok(()), // EOF：通道已由远端关闭，正常结束
             Ok(n) => {
                 let data = Vec::from(&buf[..n]);
                 self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
@@ -911,6 +915,16 @@ impl Worker {
                     data,
                 }));
                 Ok(())
+            }
+            Err(e) => {
+                if crate::ssh::is_would_block(&e) {
+                    return Ok(()); // EAGAIN：无事
+                }
+                // 真实读错误：连接已死，主动断开并广播（原因供 UI 展示）
+                let msg = format!("channel read failed: {e}");
+                tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell read failed, disconnecting");
+                self.disconnect_inner(&msg);
+                Err(CoreError::Internal(msg))
             }
         }
     }
