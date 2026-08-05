@@ -2,6 +2,7 @@
 // 主机新增/编辑滑出面板：从右侧覆盖主机栏（不覆盖工作区），带滑出动画
 // 覆盖式交互：完成/取消后才可进行下一次操作（主机栏无并发需求）
 import { computed, ref, watch } from 'vue'
+import EyeToggle from './EyeToggle.vue'
 import { t } from '../composables/i18n'
 
 export interface HostForm {
@@ -97,15 +98,8 @@ function submit() {
           <label>{{ t('form.password') }}
             <div class="secret-row">
               <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
-              <!-- 小眼睛图标：查看/隐藏密码切换（feather eye 风格，替代文字按钮） -->
-              <button type="button" class="eye-toggle" :title="showSecret ? t('form.hideSecret') : t('form.showSecret')" @click="showSecret = !showSecret">
-                <svg v-if="!showSecret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                </svg>
-                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
-                </svg>
-              </button>
+              <!-- 小眼睛图标：查看/隐藏密码切换（复用 EyeToggle 组件） -->
+              <EyeToggle :visible="showSecret" @toggle="showSecret = !showSecret" />
             </div>
           </label>
           <label class="checkbox-label">
@@ -117,14 +111,8 @@ function submit() {
           <label>{{ t('form.passphrase') }}
             <div class="secret-row">
               <input v-model="form.password" :type="showSecret ? 'text' : 'password'" :placeholder="secretPlaceholder" autocomplete="new-password" />
-              <button type="button" class="eye-toggle" :title="showSecret ? t('form.hideSecret') : t('form.showSecret')" @click="showSecret = !showSecret">
-                <svg v-if="!showSecret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
-                </svg>
-                <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>
-                </svg>
-              </button>
+              <!-- 小眼睛图标：查看/隐藏口令切换（复用 EyeToggle 组件） -->
+              <EyeToggle :visible="showSecret" @toggle="showSecret = !showSecret" />
             </div>
           </label>
           <label class="checkbox-label">
@@ -151,9 +139,9 @@ function submit() {
 </template>
 
 <style scoped>
-/* position: fixed 覆盖右侧主机栏；transform: translateX 滑出动画（约 200ms ease） */
-/* 宽度与右侧主机栏一致（220px），视觉不突兀（用户反馈） */
-.form-overlay { position: fixed; top: 0; right: 0; bottom: 0; width: 220px; background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
+/* position: fixed 覆盖右侧主机栏（不含右侧底部栏）；transform: translateX 滑出动画（约 200ms ease） */
+/* 宽度与右侧主机栏一致（220px），视觉不突兀；bottom 32px 避开底部栏（语言切换/设置，用户反馈） */
+.form-overlay { position: fixed; top: 0; right: 0; bottom: 32px; width: 220px; background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
 .form-overlay.open { transform: translateX(0); }
 .form-panel { display: flex; flex-direction: column; height: 100%; padding: 1rem; overflow-y: auto; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
@@ -168,13 +156,6 @@ function submit() {
 .secret-field { display: flex; flex-direction: column; gap: 0.4rem; }
 .secret-row { display: flex; gap: 0.3rem; }
 .secret-row input { flex: 1; min-width: 0; }
-/* 小眼睛图标按钮：无边框透明底，悬停显背景（密码查看切换） */
-.eye-toggle {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0.3rem; border: 1px solid var(--color-border); border-radius: 4px;
-  background: var(--color-background); color: var(--color-text); cursor: pointer;
-}
-.eye-toggle:hover { background: var(--color-background-mute); }
 .checkbox-label { flex-direction: row !important; align-items: center; gap: 0.4rem !important; }
 .form-actions { margin-top: 0.4rem; }
 

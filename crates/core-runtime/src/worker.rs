@@ -83,6 +83,27 @@ fn select_hash_command(present: impl Fn(&str) -> bool) -> Option<HashCommand> {
     None
 }
 
+/// 命令名（诊断日志用；不记录命令数据，避免凭据/终端内容进日志）
+fn cmd_name(cmd: &WorkerCommand) -> &'static str {
+    match cmd {
+        WorkerCommand::Connect { .. } => "Connect",
+        WorkerCommand::Disconnect => "Disconnect",
+        WorkerCommand::Close => "Close",
+        WorkerCommand::OpenChannel { .. } => "OpenChannel",
+        WorkerCommand::ChannelWrite { .. } => "ChannelWrite",
+        WorkerCommand::ChannelResize { .. } => "ChannelResize",
+        WorkerCommand::ChannelClose { .. } => "ChannelClose",
+        WorkerCommand::Exec { .. } => "Exec",
+        WorkerCommand::RemoteSha256 { .. } => "RemoteSha256",
+        WorkerCommand::SftpReadDir { .. } => "SftpReadDir",
+        WorkerCommand::SftpCreateDir { .. } => "SftpCreateDir",
+        WorkerCommand::SftpRemove { .. } => "SftpRemove",
+        WorkerCommand::SftpRename { .. } => "SftpRename",
+        WorkerCommand::SftpTransfer { .. } => "SftpTransfer",
+        WorkerCommand::CloseAllChannels => "CloseAllChannels",
+    }
+}
+
 /// 会话级命令（Active Object 的 Method Request）
 /// 所有变体经 mpsc 队列串行到达 worker，回执用 oneshot
 pub(crate) enum WorkerCommand {
@@ -812,6 +833,16 @@ impl Worker {
 
     /// 处理单条命令；返回 false 表示应结束线程
     fn handle(&mut self, cmd: WorkerCommand) -> bool {
+        // 诊断日志：每条命令的开始与结束（调试 worker 卡死/挂起问题时用 RUST_LOG=debug 复现）
+        // 只记录命令名，不记录数据（避免凭据/终端内容进日志）
+        tracing::debug!(session_id = ?self.session_id(), cmd = cmd_name(&cmd), "worker handle cmd start");
+        let r = self.handle_inner(cmd);
+        tracing::debug!(session_id = ?self.session_id(), "worker handle cmd end");
+        r
+    }
+
+    /// handle 的实际实现（诊断日志包裹后单独抽出）
+    fn handle_inner(&mut self, cmd: WorkerCommand) -> bool {
         match cmd {
             WorkerCommand::Connect {
                 config,

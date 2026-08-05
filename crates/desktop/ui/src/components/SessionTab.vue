@@ -74,13 +74,10 @@ function uploadFromLocal(localPath: string) {
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
     <div class="terminal-wrapper">
+      <!-- 终端头部：仅主机名；断连/重连按钮已移除（用户反馈：遮罩中央的重连按钮方案更协调，
+           断开操作走标签栏 × 关闭） -->
       <div class="terminal-header">
         <span class="connection-info">{{ tab.hostName }}</span>
-        <div class="header-actions">
-          <!-- 断开时显示手动重连按钮（从不主动重连，仅提示状态） -->
-          <button v-if="tab.status === 'disconnected'" class="btn btn-primary" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
-          <button class="btn btn-danger" @click="emit('close')">{{ tab.status === 'connected' ? t('tab.disconnect') : t('tab.close') }}</button>
-        </div>
       </div>
       <!-- 状态条：连接中 / 已断开（原因）/ 重连中 -->
       <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
@@ -104,7 +101,6 @@ function uploadFromLocal(localPath: string) {
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; }
-.header-actions { display: flex; gap: 0.4rem; }
 .status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; border-bottom: 1px solid var(--color-border); }
 .status-banner.connecting, .status-banner.reconnecting { background: rgba(210, 153, 34, 0.12); color: #d29922; }
 .status-banner.disconnected { background: rgba(229, 83, 75, 0.12); color: #e5534b; }

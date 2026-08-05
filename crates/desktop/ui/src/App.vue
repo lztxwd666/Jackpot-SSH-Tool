@@ -185,36 +185,69 @@ async function connectHost(host: Host) {
   await doConnectWith(host, secret)
 }
 
+// 连接操作总超时（毫秒）：TCP 连接超时 30s + 认证/开通道余量。
+// 防御性：即使后端挂起（worker 卡死/网络黑洞），前端 UI 不死锁——
+// connecting 卡 true 会吞掉所有后续连接操作（用户实测"断开后无法连接"现象）
+const CONNECT_TIMEOUT_MS = 45_000
+
+// 带超时的 Promise 包装：超时 reject 标记错误 'connect-timeout'
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('connect-timeout')), ms)
+    p.then(
+      (v) => { window.clearTimeout(timer); resolve(v) },
+      (e) => { window.clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
 // 执行连接：create_session → connect_session → open_shell → 打开标签
 async function doConnectWith(host: Host, secret: string | null) {
   connecting.value = true
   try {
-    const sid = await invoke('create_session') as string
-    // 保存连接参数：主机密钥确认后自动重连需要
-    pendingConnectHost.value = { host, password: secret ?? '' }
-    await invoke('connect_session', {
-      sessionId: sid, host: host.address, port: host.port,
-      username: host.username, authType: host.auth_type,
-      password: secret, privateKeyPath: null, privateKeyPassphrase: null,
-    })
-    // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
-    password.value = ''
-    pendingConnectHost.value = null
-    // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
-    await applyPendingCredential()
-    const cid = await invoke('open_shell', { sessionId: sid }) as string
-    openSessionTab(sid, host.id, host.name, cid)
+    await withTimeout(connectFlow(host, secret), CONNECT_TIMEOUT_MS)
   } catch (e) {
-    const isHostKeyError = String(e).includes('host key')
-    // 主机密钥场景由 HostKey 事件驱动确认弹窗：不重复报错、不在控制台记录指纹
-    if (!isHostKeyError) {
-      console.error('Connect failed:', e)
-      // 非主机密钥失败：清理待确认参数与待保存凭据，避免陈旧状态（认证未通过，密码无效不保存）
-      pendingConnectHost.value = null
-      pendingSaveCredential.value = null
-      showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
-    }
+    handleConnectError(e)
   } finally { connecting.value = false }
+}
+
+// 连接序列（超时保护范围：create_session 起至标签打开）
+async function connectFlow(host: Host, secret: string | null) {
+  const sid = await invoke('create_session') as string
+  // 保存连接参数：主机密钥确认后自动重连需要
+  pendingConnectHost.value = { host, password: secret ?? '' }
+  await invoke('connect_session', {
+    sessionId: sid, host: host.address, port: host.port,
+    username: host.username, authType: host.auth_type,
+    password: secret, privateKeyPath: null, privateKeyPassphrase: null,
+  })
+  // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
+  password.value = ''
+  pendingConnectHost.value = null
+  // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
+  await applyPendingCredential()
+  const cid = await invoke('open_shell', { sessionId: sid }) as string
+  openSessionTab(sid, host.id, host.name, cid)
+}
+
+// 连接错误统一处理：超时 / 主机密钥（事件驱动，不处理） / 普通错误
+function handleConnectError(e: unknown) {
+  const msg = String(e)
+  // 主机密钥场景由 HostKey 事件驱动确认弹窗：不重复报错、不在控制台记录指纹
+  if (msg.includes('host key')) return
+  // 超时：清理待确认参数与待保存凭据（连接未建立，凭据不落库）；未完成的 session 由 Drop 回收
+  if (msg.includes('connect-timeout')) {
+    console.error('Connect timeout:', e)
+    pendingConnectHost.value = null
+    pendingSaveCredential.value = null
+    showToast(t('toast.connectTimeout'), 'error', 5000)
+    return
+  }
+  console.error('Connect failed:', e)
+  // 非主机密钥失败：清理待确认参数与待保存凭据，避免陈旧状态（认证未通过，密码无效不保存）
+  pendingConnectHost.value = null
+  pendingSaveCredential.value = null
+  showToast(t('toast.connectionFailed', { err: msg }), 'error', 5000)
 }
 
 // 密码弹窗（Promise 化）：确认 → resolve { secret, save }；取消 → resolve null
@@ -321,23 +354,10 @@ async function reconnectTab(tab: SessionTabState) {
 async function doReconnectWith(host: Host, secret: string | null, tab: SessionTabState) {
   connecting.value = true
   try {
-    await invoke('connect_session', {
-      sessionId: tab.sessionId, host: host.address, port: host.port,
-      username: host.username, authType: host.auth_type,
-      password: secret, privateKeyPath: null, privateKeyPassphrase: null,
-    })
-    // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
-    password.value = ''
-    pendingConnectHost.value = null
-    // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
-    await applyPendingCredential()
-    const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
-    // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
-    tab.channelId = cid
-    tab.status = 'connected'
-    tab.error = undefined
+    await withTimeout(reconnectFlow(host, secret, tab), CONNECT_TIMEOUT_MS)
   } catch (e) {
-    const isHostKeyError = String(e).includes('host key')
+    const msg = String(e)
+    const isHostKeyError = msg.includes('host key')
     // 主机密钥场景由 HostKey 事件驱动确认弹窗：保留 pendingConnectHost 与断开原因，
     // 不重复报错、不改状态（确认/拒绝后的终态由 handleHostKey 决定）
     if (!isHostKeyError) {
@@ -345,12 +365,31 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
       // 认证未通过：清理待保存凭据（密码无效不落库）
       pendingSaveCredential.value = null
       tab.status = 'disconnected'
-      tab.error = String(e)
-      showToast(t('toast.connectionFailed', { err: String(e) }), 'error', 5000)
+      tab.error = msg.includes('connect-timeout') ? t('toast.connectTimeout') : msg
+      showToast(t('toast.connectionFailed', { err: msg }), 'error', 5000)
     }
   } finally {
     connecting.value = false
   }
+}
+
+// 重连序列（超时保护范围同 doConnectWith）
+async function reconnectFlow(host: Host, secret: string | null, tab: SessionTabState) {
+  await invoke('connect_session', {
+    sessionId: tab.sessionId, host: host.address, port: host.port,
+    username: host.username, authType: host.auth_type,
+    password: secret, privateKeyPath: null, privateKeyPassphrase: null,
+  })
+  // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
+  password.value = ''
+  pendingConnectHost.value = null
+  // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
+  await applyPendingCredential()
+  const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
+  // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
+  tab.channelId = cid
+  tab.status = 'connected'
+  tab.error = undefined
 }
 
 // 主机密钥确认：Unknown（首次连接）/ Changed（密钥变更，可能 MITM）
@@ -712,7 +751,8 @@ onBeforeUnmount(() => {
 .status-badge { font-size: 0.7rem; color: hsla(160, 100%, 37%, 1); }
 /* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；border-left 分隔左右区域 */
 .right-area { display: flex; flex-direction: column; border-left: 1px solid var(--color-border); }
-.right-footer { padding: 0.4rem 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
+/* 底部栏固定高度：滑出面板以其为 bottom 边界（不遮挡底部栏，用户反馈） */
+.right-footer { height: 32px; box-sizing: border-box; padding: 0 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
 .locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }
 
 .placeholder { flex: 1; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text); opacity: 0.5; }
