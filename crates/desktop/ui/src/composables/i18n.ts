@@ -57,16 +57,28 @@ const messages: Record<Locale, Record<string, string>> = {
 
     // 主机表单
     'form.name': 'Name',
+    'form.namePlaceholder': 'My Server',
     'form.address': 'Address',
+    'form.addressPlaceholder': '192.168.1.1',
     'form.port': 'Port',
     'form.username': 'Username',
+    'form.usernamePlaceholder': 'root',
     'form.authType': 'Auth Type',
     'form.authPassword': 'Password',
     'form.authPrivateKey': 'Private Key',
     'form.authAgent': 'SSH Agent',
     'form.group': 'Group',
+    'form.groupPlaceholder': 'Production',
     'form.notes': 'Notes',
+    'form.notesPlaceholder': 'Optional notes...',
     'form.favorite': 'Favorite',
+
+    // 主机密钥确认
+    'hostkey.confirmTitle': 'Confirm Host Key',
+    'hostkey.changedTitle': 'Warning: Host Key Changed',
+    'hostkey.unknown': "The authenticity of host '{host}' can't be established.\nFingerprint: {fp}\n\nTrust this host and continue connecting?",
+    'hostkey.changed': "Host key CHANGED for {host}!\nOld: {old}\nNew: {new}\n\nThis may indicate a man-in-the-middle attack. Trust the new key?",
+    'hostkey.saveFailed': 'Failed to save host key: {err}',
 
     // 主机详情
     'detail.address': 'Address',
@@ -96,6 +108,9 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.uploaded': 'Uploaded to {path}',
     'toast.uploadFailed': 'Upload failed: {err}',
     'toast.connectionFailed': 'Connection failed: {err}',
+    'toast.pingOk': 'Ping OK, {ms}ms',
+    'toast.pingOkNoLatency': 'Ping OK',
+    'toast.pingFail': 'Ping failed',
     'toast.created': 'Created {name}',
     'toast.renamed': 'Renamed to {name}',
     'toast.deleted': 'Deleted {name}',
@@ -138,16 +153,28 @@ const messages: Record<Locale, Record<string, string>> = {
 
     // 主机表单
     'form.name': '名称',
+    'form.namePlaceholder': '我的服务器',
     'form.address': '地址',
+    'form.addressPlaceholder': '192.168.1.1',
     'form.port': '端口',
     'form.username': '用户名',
+    'form.usernamePlaceholder': 'root',
     'form.authType': '认证方式',
     'form.authPassword': '密码',
     'form.authPrivateKey': '私钥',
     'form.authAgent': 'SSH Agent',
     'form.group': '分组',
+    'form.groupPlaceholder': '生产环境',
     'form.notes': '备注',
+    'form.notesPlaceholder': '可选备注...',
     'form.favorite': '收藏',
+
+    // 主机密钥确认
+    'hostkey.confirmTitle': '确认主机密钥',
+    'hostkey.changedTitle': '警告：主机密钥已变更',
+    'hostkey.unknown': "无法确认主机 '{host}' 的真实性。\n指纹：{fp}\n\n是否信任此主机并继续连接？",
+    'hostkey.changed': "主机 {host} 的密钥已变更！\n旧指纹：{old}\n新指纹：{new}\n\n这可能表示存在中间人攻击。是否信任新密钥？",
+    'hostkey.saveFailed': '保存主机密钥失败：{err}',
 
     // 主机详情
     'detail.address': '地址',
@@ -177,6 +204,9 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.uploaded': '已上传到 {path}',
     'toast.uploadFailed': '上传失败: {err}',
     'toast.connectionFailed': '连接失败: {err}',
+    'toast.pingOk': 'Ping 成功，{ms} 毫秒',
+    'toast.pingOkNoLatency': 'Ping 成功',
+    'toast.pingFail': 'Ping 失败',
     'toast.created': '已创建 {name}',
     'toast.renamed': '已重命名为 {name}',
     'toast.deleted': '已删除 {name}',
