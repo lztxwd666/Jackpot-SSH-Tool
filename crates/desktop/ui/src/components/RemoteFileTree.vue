@@ -8,7 +8,7 @@ import { t } from '../composables/i18n'
 const LOCAL_DRAG_TYPE = 'application/x-jackpot-local'
 const REMOTE_DRAG_TYPE = 'application/x-jackpot-remote'
 
-const props = defineProps<{ sessionId: string; refreshKey: number }>()
+const props = defineProps<{ sessionId: string; refreshKey: number; locked?: boolean }>()
 
 const emit = defineEmits<{
   (e: 'download', remotePath: string): void
@@ -163,10 +163,14 @@ function doDownload() {
 // sessionId 变化或刷新令牌变化时重新加载
 watch(() => props.sessionId, (sid) => { if (sid) loadDir('/') }, { immediate: true })
 watch(() => props.refreshKey, () => { if (props.sessionId) loadDir(currentPath.value) })
+// 解锁时自动刷新目录（传输结束后文件列表可能已变化）
+watch(() => props.locked, (locked) => {
+  if (!locked && props.sessionId) loadDir(currentPath.value)
+})
 </script>
 
 <template>
-  <div class="file-tree" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragover="onDragover" @dragleave="onDragLeave" @click="closeMenu">
+  <div class="file-tree" :class="{ 'drag-over': dragOver, 'locked': locked }" @drop.prevent="onDrop" @dragover="onDragover" @dragleave="onDragLeave" @click="closeMenu">
     <div class="tree-header">
       {{ t('tree.remoteTitle') }}
       <span class="refresh" :title="t('common.refresh')" @click="refresh">
@@ -175,6 +179,7 @@ watch(() => props.refreshKey, () => { if (props.sessionId) loadDir(currentPath.v
         </svg>
       </span>
     </div>
+    <div v-if="locked" class="lock-banner">{{ t('tree.transferLocked') }}</div>
     <div class="tree-body">
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="error" class="error">{{ error }}</div>
@@ -231,6 +236,11 @@ watch(() => props.refreshKey, () => { if (props.sessionId) loadDir(currentPath.v
 .size { font-size: 0.7rem; opacity: 0.5; flex-shrink: 0; }
 .loading { padding: 0.5rem; opacity: 0.5; text-align: center; }
 .error { padding: 0.5rem; color: #e5534b; font-size: 0.75rem; text-align: center; }
+.locked { pointer-events: none; opacity: 0.6; }
+.lock-banner {
+  padding: 0.3rem 0.5rem; font-size: 0.72rem; text-align: center;
+  background: rgba(210, 153, 34, 0.15); color: #d29922;
+}
 .drag-over {
   outline: 2px solid hsla(160, 100%, 37%, 1);
   outline-offset: -2px;

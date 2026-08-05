@@ -78,10 +78,16 @@ const messages: Record<Locale, Record<string, string>> = {
     // 文件树
     'tree.localTitle': 'Local Files',
     'tree.remoteTitle': 'Remote Files',
+    'tree.transferLocked': 'Transfer in progress — file tree temporarily locked',
 
     // 输入对话框
     'prompt.folderName': 'Folder name:',
     'prompt.newName': 'New name:',
+
+    // 重连交互
+    'reconnect.passwordTitle': 'Reconnect: Enter Password',
+    'reconnect.passphraseTitle': 'Reconnect: Enter Key Passphrase',
+    'reconnect.connectingTo': 'Reconnecting to {user}@{host}',
 
     // Toast 提示
     'toast.downloadInProgress': 'Download already in progress',
@@ -91,6 +97,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.uploaded': 'Uploaded to {path}',
     'toast.uploadFailed': 'Upload failed: {err}',
     'toast.connectionFailed': 'Connection failed: {err}',
+    'toast.reconnected': 'Connection restored',
+    'toast.reconnectFailed': 'Reconnect failed: {err}',
     'toast.created': 'Created {name}',
     'toast.renamed': 'Renamed to {name}',
     'toast.deleted': 'Deleted {name}',
@@ -154,10 +162,16 @@ const messages: Record<Locale, Record<string, string>> = {
     // 文件树
     'tree.localTitle': '本地文件',
     'tree.remoteTitle': '远程文件',
+    'tree.transferLocked': '传输进行中，文件树暂时锁定',
 
     // 输入对话框
     'prompt.folderName': '文件夹名称：',
     'prompt.newName': '新名称：',
+
+    // 重连交互
+    'reconnect.passwordTitle': '重连：请输入密码',
+    'reconnect.passphraseTitle': '重连：请输入私钥口令',
+    'reconnect.connectingTo': '正在重连到 {user}@{host}',
 
     // Toast 提示
     'toast.downloadInProgress': '该文件正在下载中',
@@ -167,6 +181,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.uploaded': '已上传到 {path}',
     'toast.uploadFailed': '上传失败: {err}',
     'toast.connectionFailed': '连接失败: {err}',
+    'toast.reconnected': '连接已恢复',
+    'toast.reconnectFailed': '重连失败: {err}',
     'toast.created': '已创建 {name}',
     'toast.renamed': '已重命名为 {name}',
     'toast.deleted': '已删除 {name}',

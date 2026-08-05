@@ -56,7 +56,7 @@ Full spec at `docs/core_idea_zh/` (Chinese) and `docs/core_idea_en/` (English). 
 | -------------- | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `core-common`  | `crates/core-common/`  | Shared types, error enum, ID newtypes (UUID via `define_id!` macro), trait definitions | `CoreError`, `Host`, `HostId`/`SessionId`/`ChannelId`, `ConnectionConfig`, `AuthMethod`, `SessionState`, `ChannelType`, `ChannelState`, `PtySize`, `ReconnectPolicy`, `HostKeyInfo`, `Config`, `HostRepository`, `KnownHostsProvider`, `CredentialProvider` |
 | `core-event`   | `crates/core-event/`   | Immutable event definitions, broadcast channel dispatcher                              | `CoreEvent` (tag-based JSON via `#[serde(tag = "type")]`), `ChannelDispatcher`, `ApplicationEvent`, `SystemEvent`, `ConnectionEvent`, `HostKeyEvent`, `CredentialEvent`, `SessionEvent`, `ChannelEvent`, `HostEvent`                                        |
-| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine, keepalive and reconnect | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `spawn_keepalive()`, `spawn_reconnect()`                                                                                                           |
+| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine (worker message model: keepalive, reconnect, SFTP and transfers all run inside the per-session worker) | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `WorkerCommand`, `WorkerHandle`                                                                                                                     |
 | `core-storage` | `crates/core-storage/` | SQLite + WAL, schema migrations, `Database::execute()` is the sole DB access gate      | `Database`, `SqliteHostRepository`, `SqliteKnownHosts`                                                                                                                                                                                                      |
 | `desktop`      | `crates/desktop/`      | Tauri v2 app, IPC bridge, Vue 3 + xterm.js terminal UI                                 | `AppState`, Tauri commands                                                                                                                                                                                                                                  |
 
@@ -71,9 +71,9 @@ SshConnection::connect()
   └─ Ready event
 ```
 
-`SshConnection` holds `Option<ssh2::Session>`; disconnects on `Drop`. `Session` (higher-level) wraps `SshConnection` with state machine (`Created → Connecting → Connected → Disconnected → Closed`), owns a `Vec<Arc<Channel>>`, and supports reconnect.
+`SshConnection` holds `Option<ssh2::Session>`; disconnects on `Drop`. `Session` owns no ssh2 resources: every SSH operation is posted as a `WorkerCommand` to the per-session worker thread (Active Object model) via `WorkerHandle`, with oneshot replies. The worker serializes connect/disconnect/exec/channel/SFTP/transfer operations, drives the reconnect state machine, sends keepalives, and polls shell reads (`do_idle_work`).
 
-`Channel` wraps either `ssh2::Channel` (Shell with PTY) or `ssh2::Sftp`. All blocking I/O runs in `tokio::task::spawn_blocking`. `Channel::start_read_loop()` spawns a background task that reads and emits `DataReceived` events.
+`Channel` is a pure handle (id + channel_type + session_id + worker handle). The actual `ssh2::Channel` (Shell with PTY) and `ssh2::Sftp` live inside the worker's `raw_channels` registry. Blocking calls post commands and wait for oneshot replies (usually from `tokio::task::spawn_blocking`). Shell output is emitted as `DataReceived` events by the worker's idle poll loop; `Channel::start_read_loop()` is a compatibility no-op.
 
 ### Event Flow
 
@@ -96,7 +96,8 @@ All commands in `desktop/src/commands.rs`. Shared state: `AppState { runtime, ch
 | `list_hosts` / `save_host` / `delete_host` / `search_hosts` | Host CRUD                                                 |
 | `create_session`                                            | Creates Session, returns session_id                       |
 | `connect_session`                                           | Calls `Session::connect()` in spawn_blocking              |
-| `open_shell`                                                | Opens Shell channel, returns channel_id, starts read loop |
+| `open_shell`                                                | Opens Shell + SFTP channels, returns channel_id (read loop is worker-driven) |
+| `provide_reconnect_credential`                              | Supplies password/passphrase to the waiting reconnect flow |
 | `terminal_send_input`                                       | Writes bytes to channel                                   |
 | `terminal_resize`                                           | Resizes PTY (cols, rows)                                  |
 | `terminal_close`                                            | Closes session, removes channels                          |
@@ -118,9 +119,11 @@ SQLite at `<app_data_dir>/jackpot.db`. WAL mode, foreign keys enabled. `Database
 
 ### Keepalive & Reconnect
 
-`spawn_keepalive(session, interval_secs)` — periodic `session.keepalive_send()`; disconnects on failure.
+Both live inside the worker's idle work (`do_idle_work`); the standalone `spawn_keepalive`/`spawn_reconnect` tasks were removed in Stage 6.
 
-`spawn_reconnect(session, policy, get_config)` — exponential backoff (`base_delay * 2^(attempt-1)`, capped at `max_delay`). `get_config` closure called per attempt to fetch fresh credentials. Emits `Reconnecting` and `ReconnectFailed` events.
+Keepalive: the worker sends `keepalive_send()` every 30s of idle time; on failure it disconnects and schedules a reconnect (if a policy is set).
+
+Reconnect: a worker-internal state machine (`Idle → Backoff → AwaitingCredential → Idle`) with exponential backoff (`base_delay * 2^(attempt-1)`, capped at `max_delay`; `max_retries = 0` means no reconnect). Password/passphrase-protected profiles broadcast `CredentialEvent::Required` and wait up to 60s for `WorkerCommand::ProvideCredential`. Emits `Reconnecting`, `Reconnected` and `ReconnectFailed` events. `Session::set_reconnect_policy()` syncs the policy to the worker copy.
 
 ### Frontend
 

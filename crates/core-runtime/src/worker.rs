@@ -106,6 +106,45 @@ fn profile_to_config(profile: &HostConnectionProfile) -> ConnectionConfig {
     .with_timeout(profile.timeout_secs)
 }
 
+/// 远端哈希命令（探测结果缓存，会话级：同一次连接不会换操作系统）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HashCommand {
+    Sha256sum, // GNU/Linux、busybox/Alpine
+    Shasum,    // Perl（macOS/BSD 通用）
+    BsdSha256, // BSD 原生
+    Openssl,   // OpenSSL 兜底
+}
+
+/// 按命令类型解析哈希输出；无法解析返回 None
+pub(crate) fn parse_hash_output(cmd: &HashCommand, out: &str) -> Option<String> {
+    match cmd {
+        HashCommand::Sha256sum | HashCommand::Shasum => {
+            out.split_whitespace().next().map(|s| s.to_string())
+        }
+        HashCommand::Openssl | HashCommand::BsdSha256 => {
+            out.split('=').nth(1).map(|s| s.split_whitespace().next().unwrap_or("").to_string())
+                .filter(|s| !s.is_empty())
+        }
+    }
+}
+
+/// 按探测结果选择命令（顺序 = 跨平台覆盖概率）
+fn select_hash_command(present: impl Fn(&str) -> bool) -> Option<HashCommand> {
+    if present("sha256sum") {
+        return Some(HashCommand::Sha256sum);
+    }
+    if present("shasum") {
+        return Some(HashCommand::Shasum);
+    }
+    if present("sha256") {
+        return Some(HashCommand::BsdSha256);
+    }
+    if present("openssl") {
+        return Some(HashCommand::Openssl);
+    }
+    None
+}
+
 /// 会话级命令（Active Object 的 Method Request）
 /// 所有变体经 mpsc 队列串行到达 worker，回执用 oneshot
 pub(crate) enum WorkerCommand {
@@ -138,6 +177,10 @@ pub(crate) enum WorkerCommand {
     Exec {
         command: String,
         reply: oneshot::Sender<CoreResult<String>>,
+    },
+    RemoteSha256 {
+        path: String,
+        reply: oneshot::Sender<CoreResult<Option<String>>>,
     },
     SftpReadDir {
         path: String,
@@ -262,6 +305,7 @@ struct Worker {
     reconnect_policy: Option<ReconnectPolicy>, // 由 Session::set_reconnect_policy 同步
     host_config: Option<HostConnectionProfile>, // 重连用配置骨架（connect 成功时保存）
     known_hosts: Option<Arc<dyn KnownHostsProvider>>, // 首次 connect 传入，重连复用
+    hash_cmd: Option<HashCommand>,     // 远端哈希命令探测结果缓存（会话级）
 }
 
 impl Worker {
@@ -287,6 +331,7 @@ impl Worker {
             reconnect_policy: None,
             host_config: None,
             known_hosts: None,
+            hash_cmd: None,
         }
     }
 
@@ -531,6 +576,51 @@ impl Worker {
         conn.exec_command(command)
     }
 
+    /// 探测并缓存哈希命令（会话级：同一次连接不会换操作系统）
+    fn ensure_hash_cmd(&mut self) -> CoreResult<Option<HashCommand>> {
+        if let Some(cmd) = self.hash_cmd {
+            return Ok(Some(cmd));
+        }
+        let present = |name: &str| -> bool {
+            // command -v 是 POSIX 内置：存在则 stdout 非空
+            self.exec_inner(&format!("command -v {name}"))
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false)
+        };
+        let selected = select_hash_command(present);
+        if let Some(cmd) = selected {
+            self.hash_cmd = Some(cmd);
+            tracing::info!(?cmd, "remote hash command selected");
+        } else {
+            tracing::warn!("no hash command available on remote host, checksum will be skipped");
+        }
+        Ok(selected)
+    }
+
+    /// 计算远程文件哈希；远端无可用命令或 exec 失败返回 Ok(None)（跳过校验）
+    /// 错误分级（权威设计 §7.3）：exec 错误（连接断开等）也跳过而非报错，仅 warn
+    fn remote_sha256_inner(&mut self, path: &str) -> CoreResult<Option<String>> {
+        let cmd = match self.ensure_hash_cmd()? {
+            Some(c) => c,
+            None => return Ok(None),
+        };
+        let escaped = path.replace('\'', "'\\''");
+        let command = match cmd {
+            HashCommand::Sha256sum => format!("sha256sum -- '{}'", escaped),
+            HashCommand::Shasum => format!("shasum -a 256 -- '{}'", escaped),
+            HashCommand::BsdSha256 => format!("sha256 '{}'", escaped),
+            HashCommand::Openssl => format!("openssl dgst -sha256 '{}'", escaped),
+        };
+        let out = match self.exec_inner(&command) {
+            Ok(out) => out,
+            Err(e) => {
+                tracing::warn!(error = %e, "remote hash exec failed, checksum skipped");
+                return Ok(None);
+            }
+        };
+        Ok(parse_hash_output(&cmd, &out))
+    }
+
     /// 获取当前 worker 绑定的 session_id（构造时注入，始终有值）
     fn session_id(&self) -> SessionId {
         self.session_id
@@ -569,7 +659,7 @@ impl Worker {
         Ok(channel_id)
     }
 
-    /// 向通道写入数据（处理部分写入 + EAGAIN 重试）
+    /// 向通道写入数据（处理部分写入；EAGAIN 重试统一走 io_retry）
     fn channel_write_inner(&mut self, channel: ChannelId, data: &[u8]) -> CoreResult<()> {
         let inner = self
             .raw_channels
@@ -579,11 +669,8 @@ impl Worker {
             ChannelInner::Session(ch) => {
                 let mut written = 0;
                 while written < data.len() {
-                    match ch.write(&data[written..]) {
+                    match io_retry(|| ch.write(&data[written..]), &self.cancel) {
                         Ok(n) => written += n,
-                        Err(e) if crate::ssh::is_would_block(&e) => {
-                            std::thread::sleep(std::time::Duration::from_millis(2));
-                        }
                         Err(e) => {
                             return Err(CoreError::Internal(format!("channel write failed: {e}")));
                         }
@@ -597,7 +684,7 @@ impl Worker {
         }
     }
 
-    /// 调整 PTY 尺寸（EAGAIN 重试最多 20 次）
+    /// 调整 PTY 尺寸（EAGAIN 重试统一走 io_retry）
     fn channel_resize_inner(&mut self, channel: ChannelId, cols: u32, rows: u32) -> CoreResult<()> {
         let inner = self
             .raw_channels
@@ -605,19 +692,12 @@ impl Worker {
             .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
         match inner {
             ChannelInner::Session(ch) => {
-                let mut retries = 0;
-                loop {
-                    match ch.request_pty_size(cols, rows, Some(cols * 8), Some(rows * 16)) {
-                        Ok(()) => return Ok(()),
-                        Err(e) if crate::ssh::is_would_block(&e) && retries < 20 => {
-                            retries += 1;
-                            std::thread::sleep(std::time::Duration::from_millis(10));
-                        }
-                        Err(e) => {
-                            return Err(CoreError::Internal(format!("resize pty failed: {e}")));
-                        }
-                    }
-                }
+                io_retry(
+                    || ch.request_pty_size(cols, rows, Some(cols * 8), Some(rows * 16)),
+                    &self.cancel,
+                )
+                .map_err(|e| CoreError::Internal(format!("resize pty failed: {e}")))?;
+                Ok(())
             }
             ChannelInner::Sftp(_) => Err(CoreError::Internal(
                 "resize not supported on sftp channel".into(),
@@ -671,9 +751,12 @@ impl Worker {
 
     /// 列出远程目录（过滤 . ..、构建绝对路径、目录优先排序）
     fn sftp_read_dir_inner(&mut self, path: &str) -> CoreResult<Vec<FileEntry>> {
-        let sftp = self.get_sftp()?;
-        let entries = sftp_retry_worker(|| sftp.readdir(std::path::Path::new(path)))
-            .map_err(|e| CoreError::Internal(format!("sftp readdir failed: {e}")))?;
+        let entries = sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "readdir",
+            |sftp| sftp.readdir(std::path::Path::new(path)),
+        )?;
         // 构建绝对路径
         let base = path.trim_end_matches('/');
         let mut files = Vec::new();
@@ -705,32 +788,45 @@ impl Worker {
 
     /// 创建远程目录（权限 0o755）
     fn sftp_create_dir_inner(&mut self, path: &str) -> CoreResult<()> {
-        let sftp = self.get_sftp()?;
-        sftp_retry_worker(|| sftp.mkdir(std::path::Path::new(path), 0o755))
-            .map_err(|e| CoreError::Internal(format!("sftp mkdir failed: {e}")))?;
+        sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "mkdir",
+            |sftp| sftp.mkdir(std::path::Path::new(path), 0o755),
+        )?;
         Ok(())
     }
 
     /// 删除远程文件或目录（unlink / rmdir）
     fn sftp_remove_inner(&mut self, path: &str, is_dir: bool) -> CoreResult<()> {
-        let sftp = self.get_sftp()?;
         if is_dir {
-            sftp_retry_worker(|| sftp.rmdir(std::path::Path::new(path)))
-                .map_err(|e| CoreError::Internal(format!("sftp rmdir failed: {e}")))?;
+            sftp_retry_io(
+                &mut self.raw_channels,
+                &self.cancel,
+                "rmdir",
+                |sftp| sftp.rmdir(std::path::Path::new(path)),
+            )?;
         } else {
-            sftp_retry_worker(|| sftp.unlink(std::path::Path::new(path)))
-                .map_err(|e| CoreError::Internal(format!("sftp unlink failed: {e}")))?;
+            sftp_retry_io(
+                &mut self.raw_channels,
+                &self.cancel,
+                "unlink",
+                |sftp| sftp.unlink(std::path::Path::new(path)),
+            )?;
         }
         Ok(())
     }
 
     /// 重命名远程文件或目录
     fn sftp_rename_inner(&mut self, old: &str, new: &str) -> CoreResult<()> {
-        let sftp = self.get_sftp()?;
         let old_path = std::path::Path::new(old);
         let new_path = std::path::Path::new(new);
-        sftp_retry_worker(|| sftp.rename(old_path, new_path, None))
-            .map_err(|e| CoreError::Internal(format!("sftp rename failed: {e}")))?;
+        sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "rename",
+            |sftp| sftp.rename(old_path, new_path, None),
+        )?;
         Ok(())
     }
 
@@ -775,22 +871,24 @@ impl Worker {
         progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
     ) -> CoreResult<u64> {
         // 获取远程文件大小（用于进度条）
-        let total = {
-            let sftp = self.get_sftp()?;
-            sftp_retry_worker(|| sftp.stat(std::path::Path::new(remote_path)))
-                .map_err(|e| CoreError::Internal(format!("sftp stat failed: {e}")))?
-                .size
-                .unwrap_or(0)
-        };
+        let total = sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "stat",
+            |sftp| sftp.stat(std::path::Path::new(remote_path)),
+        )?
+        .size
+        .unwrap_or(0);
         // 创建本地文件
         let mut local_file = std::fs::File::create(local_path)
             .map_err(|e| CoreError::Internal(format!("create local file failed: {e}")))?;
         // 打开远程文件（File 持有会话引用，不借用 sftp 句柄）
-        let mut file = {
-            let sftp = self.get_sftp()?;
-            sftp_retry_worker(|| sftp.open(std::path::Path::new(remote_path)))
-                .map_err(|e| CoreError::Internal(format!("sftp open failed: {e}")))?
-        };
+        let mut file = sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "open",
+            |sftp| sftp.open(std::path::Path::new(remote_path)),
+        )?;
         let mut done: u64 = 0;
         let mut chunk = [0u8; SFTP_CHUNK_SIZE];
         loop {
@@ -800,23 +898,17 @@ impl Worker {
                 // 取消（断开/Close）：显式错误走统一失败清理，避免 total==0 时误报成功
                 return Err(CoreError::Internal("transfer cancelled".into()));
             }
-            match file.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    local_file.write_all(&chunk[..n]).map_err(|e| {
-                        CoreError::Internal(format!("local write failed: {e}"))
-                    })?;
-                    done += n as u64;
-                    let _ = progress.send((done, total));
-                }
-                Err(e) => {
-                    if crate::ssh::is_would_block(&e) {
-                        std::thread::sleep(std::time::Duration::from_millis(2));
-                        continue;
-                    }
-                    return Err(CoreError::Internal(format!("sftp read failed: {e}")));
-                }
+            // 读块（EAGAIN 重试统一走 io_retry，重试期间检查取消标志）
+            let n = io_retry(|| file.read(&mut chunk), &self.cancel)
+                .map_err(|e| CoreError::Internal(format!("sftp read failed: {e}")))?;
+            if n == 0 {
+                break;
             }
+            local_file.write_all(&chunk[..n]).map_err(|e| {
+                CoreError::Internal(format!("local write failed: {e}"))
+            })?;
+            done += n as u64;
+            let _ = progress.send((done, total));
         }
         // 完整性校验：写入字节数必须与远端文件大小一致
         if total > 0 && done != total {
@@ -842,11 +934,12 @@ impl Worker {
         let mut local_file = std::fs::File::open(local_path)
             .map_err(|e| CoreError::Internal(format!("open local file failed: {e}")))?;
         // 创建远程文件
-        let mut file = {
-            let sftp = self.get_sftp()?;
-            sftp_retry_worker(|| sftp.create(std::path::Path::new(remote_path)))
-                .map_err(|e| CoreError::Internal(format!("sftp create failed: {e}")))?
-        };
+        let mut file = sftp_retry_io(
+            &mut self.raw_channels,
+            &self.cancel,
+            "create",
+            |sftp| sftp.create(std::path::Path::new(remote_path)),
+        )?;
         let mut done: u64 = 0;
         let mut chunk = [0u8; SFTP_CHUNK_SIZE];
         let result = (|| -> CoreResult<u64> {
@@ -863,16 +956,12 @@ impl Worker {
                 if n == 0 {
                     break;
                 }
-                // 写入完整块（处理 EAGAIN 与部分写入）
+                // 写入完整块（处理 EAGAIN 与部分写入；重试统一走 io_retry）
                 let mut off = 0;
                 while off < n {
-                    match file.write(&chunk[off..n]) {
+                    match io_retry(|| file.write(&chunk[off..n]), &self.cancel) {
                         Ok(w) => off += w,
                         Err(e) => {
-                            if crate::ssh::is_would_block(&e) {
-                                std::thread::sleep(std::time::Duration::from_millis(2));
-                                continue;
-                            }
                             return Err(CoreError::Internal(format!("sftp write failed: {e}")));
                         }
                     }
@@ -881,13 +970,14 @@ impl Worker {
                 let _ = progress.send((done, total));
             }
             // 完整性校验：远端文件大小必须与本地一致
-            let remote_size = {
-                let sftp = self.get_sftp()?;
-                sftp_retry_worker(|| sftp.stat(std::path::Path::new(remote_path)))
-                    .map_err(|e| CoreError::Internal(format!("sftp stat failed: {e}")))?
-                    .size
-                    .unwrap_or(0)
-            };
+            let remote_size = sftp_retry_io(
+                &mut self.raw_channels,
+                &self.cancel,
+                "stat",
+                |sftp| sftp.stat(std::path::Path::new(remote_path)),
+            )?
+            .size
+            .unwrap_or(0);
             if remote_size != done {
                 return Err(CoreError::Internal(format!(
                     "upload size mismatch: remote has {remote_size} bytes, expected {done}"
@@ -946,6 +1036,10 @@ impl Worker {
             }
             WorkerCommand::Exec { command, reply } => {
                 let r = self.exec_inner(&command);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::RemoteSha256 { path, reply } => {
+                let r = self.remote_sha256_inner(&path);
                 let _ = reply.send(r);
             }
             WorkerCommand::OpenChannel { ctype, reply } => {
@@ -1106,27 +1200,56 @@ impl Worker {
     }
 }
 
-/// SFTP 操作重试：非阻塞模式下 EAGAIN 最多重试 20 次，间隔 50ms（总计约 1 秒）
-/// 传输循环内的大块读写不走此辅助（自有 2ms 短重试 + 嵌套命令处理）
-fn sftp_retry_worker<T, F>(mut f: F) -> Result<T, ssh2::Error>
+/// 统一的 EAGAIN 重试：指数退避 2→32ms 封顶；每轮迭代检查取消标志
+/// 错误判定用 is_would_block（错误码匹配 + source 链查找，兜底字符串匹配），
+/// 兼容 ssh2::Error 与包装它的 io::Error（io::Read/io::Write trait 返回 io::Error）
+/// 仅在 worker 线程内调用（sleep 重试不阻塞其他逻辑）
+fn io_retry<T, E>(
+    mut op: impl FnMut() -> Result<T, E>,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<T, E>
 where
-    F: FnMut() -> Result<T, ssh2::Error>,
+    E: std::error::Error + 'static,
 {
-    let mut attempts = 0;
+    let mut delay = 2u64;
     loop {
-        match f() {
+        match op() {
             Ok(v) => return Ok(v),
             Err(e) => {
-                let msg = format!("{e}").to_lowercase();
-                if (msg.contains("would block") || msg.contains("-37")) && attempts < 20 {
-                    attempts += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                if crate::ssh::is_would_block(&e)
+                    && !cancel.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    delay = (delay * 2).min(32);
                     continue;
                 }
                 return Err(e);
             }
         }
     }
+}
+
+/// 对 sftp 通道执行一次操作并统一 EAGAIN 重试（io_retry）
+/// 同时借用 raw_channels 与 cancel 两个字段（字段级借用，互不冲突），
+/// 避免经 get_sftp 的整体 &mut self 借用与取消标志检查发生冲突
+fn sftp_retry_io<T, F>(
+    channels: &mut HashMap<ChannelId, ChannelInner>,
+    cancel: &AtomicBool,
+    what: &str,
+    mut op: F,
+) -> CoreResult<T>
+where
+    F: FnMut(&mut ssh2::Sftp) -> Result<T, ssh2::Error>,
+{
+    let sftp = channels
+        .values_mut()
+        .find_map(|inner| match inner {
+            ChannelInner::Sftp(s) => Some(s),
+            _ => None,
+        })
+        .ok_or_else(|| CoreError::Internal("sftp channel not found".into()))?;
+    io_retry(|| op(sftp), cancel)
+        .map_err(|e| CoreError::Internal(format!("sftp {what} failed: {e}")))
 }
 
 #[cfg(test)]
@@ -1264,5 +1387,90 @@ mod tests {
             std::time::Instant::now(),
             std::time::Duration::from_secs(30)
         ));
+    }
+
+    #[test]
+    fn test_parse_hash_output_sha256sum() {
+        assert_eq!(
+            parse_hash_output(&HashCommand::Sha256sum, "abc123  /etc/file").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn test_parse_hash_output_openssl() {
+        assert_eq!(
+            parse_hash_output(&HashCommand::Openssl, "SHA2-256(/etc/file)= abc123").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn test_parse_hash_output_bsd() {
+        assert_eq!(
+            parse_hash_output(&HashCommand::BsdSha256, "SHA256 (/etc/file) = abc123").as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn test_parse_hash_output_empty() {
+        assert_eq!(parse_hash_output(&HashCommand::Sha256sum, ""), None);
+    }
+
+    #[test]
+    fn test_select_hash_command_prefers_sha256sum() {
+        // 探测结果决策：优先 sha256sum
+        let present = |name: &str| -> bool { name == "sha256sum" };
+        let selected = select_hash_command(present);
+        assert!(matches!(selected, Some(HashCommand::Sha256sum)));
+    }
+
+    #[test]
+    fn test_select_hash_command_none_available() {
+        let present = |_: &str| -> bool { false };
+        assert!(select_hash_command(present).is_none());
+    }
+
+    #[test]
+    fn test_io_retry_retries_would_block_then_succeeds() {
+        // EAGAIN 两次后成功：io_retry 应退避重试直至成功
+        let cancel = AtomicBool::new(false);
+        let mut calls = 0;
+        let r = io_retry(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err(ssh2::Error::new(
+                        ssh2::ErrorCode::Session(-37),
+                        "Would block waiting for status message",
+                    ))
+                } else {
+                    Ok(42u64)
+                }
+            },
+            &cancel,
+        );
+        assert_eq!(r.unwrap(), 42);
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn test_io_retry_cancel_stops_retrying() {
+        // 取消标志置位：EAGAIN 不得继续重试，立即返回错误
+        let cancel = AtomicBool::new(true);
+        let mut calls = 0;
+        let r: Result<u64, ssh2::Error> = io_retry(
+            || {
+                calls += 1;
+                Err(ssh2::Error::new(
+                    ssh2::ErrorCode::Session(-37),
+                    "would block",
+                ))
+            },
+            &cancel,
+        );
+        assert!(r.is_err());
+        assert_eq!(calls, 1, "cancel 置位时不得重试");
     }
 }

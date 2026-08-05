@@ -47,6 +47,9 @@ const channelId = ref('')
 const sessionId = ref('')
 const password = ref('')
 const showPasswordPrompt = ref(false)
+// 重连交互状态：重连进行中 / 传输锁定时远程文件树锁定
+const reconnecting = ref(false)
+const remoteTreeLocked = ref(false)
 // 待确认主机密钥时的连接参数（确认后自动重连）
 const pendingConnect = ref<null | { host: string; port: number; username: string; authType: string; password: string }>(null)
 // SFTP 相关状态
@@ -211,6 +214,38 @@ async function disconnect() {
   connected.value = false; channelId.value = ''; sessionId.value = ''
 }
 
+// 重连成功后自动重建通道（open_shell 连带：Shell + SFTP + keepalive 由 worker 空闲工作承担）
+async function rebuildChannels() {
+  if (!sessionId.value) return
+  try {
+    const cid = await invoke('open_shell', { sessionId: sessionId.value }) as string
+    channelId.value = cid
+    connected.value = true
+    showToast(t('toast.reconnected'), 'success', 4000)
+  } catch (e) {
+    showToast(t('toast.reconnectFailed', { err: String(e) }), 'error', 5000)
+  }
+}
+
+// 重连凭据弹框（复用现有 modal 样式；取消不调用 provide_reconnect_credential，60s 超时兜底）
+const credentialPrompt = ref<null | { sessionId: string; kind: string; host: string }>(null)
+const credentialSecret = ref('')
+function showReconnectCredential(d: any) {
+  credentialPrompt.value = { sessionId: d.session_id, kind: d.auth_kind, host: d.host }
+  credentialSecret.value = ''
+}
+async function submitCredential() {
+  if (!credentialPrompt.value) return
+  try {
+    await invoke('provide_reconnect_credential', {
+      sessionId: credentialPrompt.value.sessionId,
+      secret: credentialSecret.value,
+    })
+  } catch (e) { showToast(String(e), 'error', 5000) }
+  credentialPrompt.value = null
+  credentialSecret.value = ''
+}
+
 // SFTP 操作
 // 下载目标优先级：拖拽目标目录 > 本地文件树当前目录 > 用户主目录\Downloads > 用户主目录
 // 注意：C:\Users 根目录因 UAC 权限限制不可写，切勿作为默认目标
@@ -313,6 +348,29 @@ onMounted(async () => {
     if (parsed.type === 'HostKey' && (parsed.payload?.kind === 'Unknown' || parsed.payload?.kind === 'Changed')) {
       handleHostKey(parsed.payload.kind, parsed.payload?.detail)
     }
+    // 重连状态机：Reconnecting / Reconnected / ReconnectFailed
+    if (parsed.type === 'Session') {
+      const kind = parsed.payload?.kind
+      if (kind === 'Reconnecting') {
+        reconnecting.value = true
+      } else if (kind === 'Reconnected') {
+        reconnecting.value = false
+        rebuildChannels()
+      } else if (kind === 'ReconnectFailed') {
+        reconnecting.value = false
+        showToast(t('toast.reconnectFailed', { err: parsed.payload?.detail?.reason || '' }), 'error', 5000)
+      }
+    }
+    // 重连需要用户提供凭据（密码或私钥口令）
+    if (parsed.type === 'Credential' && parsed.payload?.kind === 'Required') {
+      const d = parsed.payload.detail
+      showReconnectCredential(d)
+    }
+    // 传输窗口标记：Locked 锁远程文件树，Unlocked 解锁
+    if (parsed.type === 'Transfer') {
+      const kind = parsed.payload?.kind
+      remoteTreeLocked.value = kind === 'Locked'
+    }
   })
   // 传输进度事件（流式下载/上传）
   // 与后端 commands/sftp.rs 的 TransferProgress 结构对应
@@ -348,6 +406,7 @@ onBeforeUnmount(() => {
       <RemoteFileTree
         :sessionId="sessionId"
         :refreshKey="remoteRefreshKey"
+        :locked="remoteTreeLocked"
         @download="downloadFile"
         @upload="uploadFile"
         @current-dir="(p: string) => remoteCurrentDir = p"
@@ -468,6 +527,21 @@ onBeforeUnmount(() => {
           <div class="modal-actions">
             <button type="submit" class="btn btn-primary" :disabled="connecting">{{ connecting ? t('common.connecting') : t('common.connect') }}</button>
             <button type="button" class="btn" @click="cancelConnect">{{ t('common.cancel') }}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 重连凭据弹窗（取消不调用 provide_reconnect_credential，60s 超时兜底） -->
+    <div v-if="credentialPrompt" class="modal-overlay" @click.self="credentialPrompt = null">
+      <div class="modal">
+        <h3>{{ credentialPrompt.kind === 'private_key_passphrase' ? t('reconnect.passphraseTitle') : t('reconnect.passwordTitle') }}</h3>
+        <p>{{ t('reconnect.connectingTo', { user: selectedHost?.username || '', host: credentialPrompt.host }) }}</p>
+        <form @submit.prevent="submitCredential">
+          <input v-model="credentialSecret" type="password" autofocus required />
+          <div class="modal-actions">
+            <button type="submit" class="btn btn-primary">{{ t('common.ok') }}</button>
+            <button type="button" class="btn" @click="credentialPrompt = null">{{ t('common.cancel') }}</button>
           </div>
         </form>
       </div>

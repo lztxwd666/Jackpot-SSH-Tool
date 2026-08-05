@@ -151,6 +151,7 @@ pub async fn sftp_download_file(
     .map_err(|e| e.to_string())?;
 
     // SHA-256 完整性校验：远端 hash vs 本地 hash
+    // 错误分级：哈希不匹配才删除文件并报错；远端无哈希命令或 exec 错误 → warn + 跳过校验保留文件
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
@@ -165,14 +166,19 @@ pub async fn sftp_download_file(
     .await
     .map_err(|e| e.to_string())?;
 
-    let remote_hash = remote_hash.map_err(|e| e.to_string())?;
-    let local_hash = local_hash.map_err(|e| e.to_string())?;
-    if !remote_hash.eq_ignore_ascii_case(&local_hash) {
-        // 校验失败：删除不完整的本地文件并报错
-        let _ = std::fs::remove_file(&lp);
-        return Err(format!(
-            "checksum mismatch: remote {remote_hash}, local {local_hash}"
-        ));
+    match remote_hash.map_err(|e| e.to_string())? {
+        // 远端无哈希命令（如 macOS/BSD）：跳过校验并保留文件
+        None => {
+            tracing::warn!(%rp, "remote hash command unavailable, checksum skipped");
+        }
+        Some(rh) => {
+            let local_hash = local_hash.map_err(|e| e.to_string())?;
+            if !rh.eq_ignore_ascii_case(&local_hash) {
+                // 校验失败：删除不完整的本地文件并报错
+                let _ = std::fs::remove_file(&lp);
+                return Err(format!("checksum mismatch: remote {rh}, local {local_hash}"));
+            }
+        }
     }
     Ok(done)
 }
@@ -220,6 +226,7 @@ pub async fn sftp_upload_file(
     .map_err(|e| e.to_string())?;
 
     // SHA-256 完整性校验：远端 hash vs 本地 hash
+    // 错误分级：哈希不匹配才删除远端文件并报错；远端无哈希命令或 exec 错误 → warn + 跳过校验保留文件
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
@@ -234,14 +241,19 @@ pub async fn sftp_upload_file(
     .await
     .map_err(|e| e.to_string())?;
 
-    let remote_hash = remote_hash.map_err(|e| e.to_string())?;
-    let local_hash = local_hash.map_err(|e| e.to_string())?;
-    if !remote_hash.eq_ignore_ascii_case(&local_hash) {
-        // 校验失败：删除损坏的远端文件并报错
-        let _ = ch_verify.sftp_remove_file(&rp);
-        return Err(format!(
-            "checksum mismatch: remote {remote_hash}, local {local_hash}"
-        ));
+    match remote_hash.map_err(|e| e.to_string())? {
+        // 远端无哈希命令（如 macOS/BSD）：跳过校验并保留文件
+        None => {
+            tracing::warn!(%rp, "remote hash command unavailable, checksum skipped");
+        }
+        Some(rh) => {
+            let local_hash = local_hash.map_err(|e| e.to_string())?;
+            if !rh.eq_ignore_ascii_case(&local_hash) {
+                // 校验失败：删除损坏的远端文件并报错
+                let _ = ch_verify.sftp_remove_file(&rp);
+                return Err(format!("checksum mismatch: remote {rh}, local {local_hash}"));
+            }
+        }
     }
     Ok(done)
 }

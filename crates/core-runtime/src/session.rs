@@ -163,17 +163,14 @@ impl Session {
         Vec::new()
     }
 
-    /// 计算远程文件的 SHA-256 校验和（通过 worker Exec sha256sum）
-    pub fn remote_sha256(&self, path: &str) -> CoreResult<String> {
-        let escaped = path.replace('\'', "'\\''");
+    /// 计算远程文件的 SHA-256 校验和；远端无可用哈希命令或 exec 失败时返回 None（跳过校验）
+    /// 命令探测与解析在 worker 内完成（会话级缓存），输出格式按命令区分解析
+    pub fn remote_sha256(&self, path: &str) -> CoreResult<Option<String>> {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let reply = self.worker.call(
-            WorkerCommand::Exec { command: format!("sha256sum '{}'", escaped), reply: reply_tx },
+        self.worker.call(
+            WorkerCommand::RemoteSha256 { path: path.to_string(), reply: reply_tx },
             reply_rx,
-        )?;
-        let hash = reply.split_whitespace().next()
-            .ok_or_else(|| CoreError::Internal("empty sha256sum output".into()))?;
-        Ok(hash.to_string())
+        )
     }
 
     /// 关闭所有通道（投递 CloseAllChannels 到 worker）
