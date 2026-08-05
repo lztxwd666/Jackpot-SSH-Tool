@@ -51,15 +51,18 @@ function uploadFromLocal(localPath: string) {
 <template>
   <!-- 布局顺序：本地文件树 | 远程文件树 | 终端（恢复 Stage 5 原设计；Task 5 曾误写为终端在左） -->
   <div class="session-tab">
-    <div class="panel" style="width:180px; min-width:180px;">
+    <!-- 断连遮罩（用户反馈）：断开后文件树与终端各自遮罩提示，不可操作；
+         终端内容保留可见（断开前输出可回看）；重连按钮集中在终端遮罩 -->
+    <div class="panel panel-relative" style="width:180px; min-width:180px;">
       <LocalFileTree
         :refreshKey="localRefreshKey"
         @download="(p: string, dir: string) => emit('download', p, dir)"
         @current-dir="(p: string) => localCurrentDir = p"
         @upload-request="uploadFromLocal"
       />
+      <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
-    <div class="panel" style="width:180px; min-width:180px;">
+    <div class="panel panel-relative" style="width:180px; min-width:180px;">
       <RemoteFileTree
         :sessionId="tab.sessionId"
         :refreshKey="remoteRefreshKey"
@@ -68,6 +71,7 @@ function uploadFromLocal(localPath: string) {
         @upload="(dir: string, p: string) => emit('upload', dir, p, localCurrentDir)"
         @current-dir="(p: string) => remoteCurrentDir = p"
       />
+      <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
     <div class="terminal-wrapper">
       <div class="terminal-header">
@@ -82,7 +86,14 @@ function uploadFromLocal(localPath: string) {
       <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
         {{ statusText(tab) }}
       </div>
-      <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
+      <div class="terminal-body">
+        <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
+        <!-- 终端遮罩：断开时覆盖终端区（内容仍可见），中央提示 + 重连按钮 -->
+        <div v-if="tab.status === 'disconnected'" class="disconnect-overlay terminal-overlay">
+          <span class="overlay-title">{{ t('tab.overlayDisconnected') }}</span>
+          <button class="btn btn-primary" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -98,6 +109,18 @@ function uploadFromLocal(localPath: string) {
 .status-banner.connecting, .status-banner.reconnecting { background: rgba(210, 153, 34, 0.12); color: #d29922; }
 .status-banner.disconnected { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
 .panel { display: flex; flex-direction: column; overflow: hidden; }
+/* 断连遮罩容器：文件树/终端区域定位上下文 */
+.panel-relative, .terminal-body { position: relative; }
+.terminal-body { flex: 1; display: flex; overflow: hidden; }
+/* 断连遮罩：半透明覆盖各自区域（内容保留可见），中央提示；禁止交互 */
+.disconnect-overlay {
+  position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-text); font-size: 0.8rem; z-index: 5;
+  pointer-events: auto;
+}
+.terminal-overlay { flex-direction: column; gap: 0.6rem; }
+.overlay-title { color: #e5534b; font-weight: 600; }
 
 /* 本组件内按钮样式（App.vue scoped 样式不作用于此，Task 6 的 .btn-danger 同例） */
 .btn {

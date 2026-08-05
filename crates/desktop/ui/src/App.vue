@@ -610,30 +610,34 @@ onBeforeUnmount(() => {
           />
         </template>
       </div>
-      <!-- 状态栏：左侧区域底部，运行状态徽标 + 语言切换（用户反馈：与主机栏分离，
-           底部栏后续放置设置图标等功能，语言切换归属此栏） -->
+      <!-- 状态栏：左侧区域底部，仅运行状态徽标（语言切换在右侧底部栏，用户反馈） -->
       <div class="status-bar">
         <span class="status-badge">{{ t('status.' + status) }}</span>
-        <span class="status-spacer"></span>
+        <!-- 后续扩展：传输统计/网络状态等显示预留位 -->
+      </div>
+    </div>
+
+    <!-- 右侧区域：主机栏（上下贯通）+ 独立底部栏（语言切换 + 后续功能：设置图标等） -->
+    <div class="right-area">
+      <HostPanel
+        :hosts="hosts"
+        :search-query="searchQuery"
+        @connect="connectHost"
+        @edit="openEditPanel"
+        @ping="onPing"
+        @delete="onDeleteHost"
+        @new="openNewPanel"
+        @search="onSearch"
+      />
+      <!-- 右侧底部栏：与主机栏切割开的独立栏位（用户反馈：语言切换 + 后续设置图标等功能） -->
+      <div class="right-footer">
         <select class="locale-select" :value="locale" @change="onLocaleChange(($event.target as HTMLSelectElement).value as Locale)">
           <option value="en">English</option>
           <option value="zh">中文</option>
         </select>
-        <!-- 后续扩展：设置图标等显示预留位（当前仅状态徽标 + 语言切换） -->
+        <!-- 预留：设置图标等（后续） -->
       </div>
     </div>
-
-    <!-- 右侧主机栏：双击直连 + 右键菜单 + 滑出表单面板（上下贯通，无底部栏） -->
-    <HostPanel
-      :hosts="hosts"
-      :search-query="searchQuery"
-      @connect="connectHost"
-      @edit="openEditPanel"
-      @ping="onPing"
-      @delete="onDeleteHost"
-      @new="openNewPanel"
-      @search="onSearch"
-    />
     <HostFormPanel
       :open="panelOpen !== 'none'"
       :mode="panelOpen === 'none' ? 'new' : panelOpen"
@@ -704,9 +708,11 @@ onBeforeUnmount(() => {
 .tab-close { color: var(--color-text); opacity: 0.6; cursor: pointer; }
 .tab-close:hover { opacity: 1; }
 .tab-content { flex: 1; display: flex; overflow: hidden; }
-.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; gap: 0.4rem; }
+.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; }
 .status-badge { font-size: 0.7rem; color: hsla(160, 100%, 37%, 1); }
-.status-spacer { flex: 1; }
+/* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；border-left 分隔左右区域 */
+.right-area { display: flex; flex-direction: column; border-left: 1px solid var(--color-border); }
+.right-footer { padding: 0.4rem 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
 .locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }
 
 .placeholder { flex: 1; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text); opacity: 0.5; }

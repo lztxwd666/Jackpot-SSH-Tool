@@ -117,6 +117,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.disconnected': 'Disconnected: {reason}',
     'tab.reconnecting': 'Reconnecting...',
     'tab.reconnect': 'Reconnect',
+    'tab.overlayDisconnected': 'Connection lost',
 
     // 状态栏
     'status.running': 'Running',
@@ -238,6 +239,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.disconnected': '连接已断开：{reason}',
     'tab.reconnecting': '正在重连...',
     'tab.reconnect': '重连',
+    'tab.overlayDisconnected': '连接已断开',
 
     // 状态栏
     'status.running': '运行中',
