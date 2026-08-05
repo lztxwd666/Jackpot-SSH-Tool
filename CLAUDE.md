@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Jackpot SSH Tool — desktop SSH client. Rust workspace (Tauri v2 + Vue 3). Currently functional: host CRUD in SQLite, SSH connection with password/key auth, keepalive, exponential-backoff reconnect, and xterm.js terminal in the UI.
+Jackpot SSH Tool — desktop SSH client. Rust workspace (Tauri v2 + Vue 3). Currently functional: host CRUD in SQLite, SSH connection with password/key auth, keepalive, manual reconnect (frontend-initiated; auto-reconnect removed by product decision), and xterm.js terminal in the UI.
 
 ## Build, Test & Verification
 
@@ -52,13 +52,13 @@ Full spec at `docs/core_idea_zh/` (Chinese) and `docs/core_idea_en/` (English). 
 
 ### Crate Map
 
-| Crate          | Dir                    | Purpose                                                                                                                                                              | Key Types                                                                                                                                                                                                                                                   |
-| -------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `core-common`  | `crates/core-common/`  | Shared types, error enum, ID newtypes (UUID via `define_id!` macro), trait definitions                                                                               | `CoreError`, `Host`, `HostId`/`SessionId`/`ChannelId`, `ConnectionConfig`, `AuthMethod`, `SessionState`, `ChannelType`, `ChannelState`, `PtySize`, `ReconnectPolicy`, `HostKeyInfo`, `Config`, `HostRepository`, `KnownHostsProvider`, `CredentialProvider` |
-| `core-event`   | `crates/core-event/`   | Immutable event definitions, broadcast channel dispatcher                                                                                                            | `CoreEvent` (tag-based JSON via `#[serde(tag = "type")]`), `ChannelDispatcher`, `ApplicationEvent`, `SystemEvent`, `ConnectionEvent`, `HostKeyEvent`, `CredentialEvent`, `SessionEvent`, `ChannelEvent`, `HostEvent`                                        |
-| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine (worker message model: keepalive, reconnect, SFTP and transfers all run inside the per-session worker) | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `WorkerCommand`, `WorkerHandle`                                                                                                                    |
-| `core-storage` | `crates/core-storage/` | SQLite + WAL, schema migrations, `Database::execute()` is the sole DB access gate                                                                                    | `Database`, `SqliteHostRepository`, `SqliteKnownHosts`                                                                                                                                                                                                      |
-| `desktop`      | `crates/desktop/`      | Tauri v2 app, IPC bridge, Vue 3 + xterm.js terminal UI                                                                                                               | `AppState`, Tauri commands                                                                                                                                                                                                                                  |
+| Crate          | Dir                    | Purpose                                                                                                                                                              | Key Types                                                                                                                                                                                                                                                                                   |
+| -------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `core-common`  | `crates/core-common/`  | Shared types, error enum, ID newtypes (UUID via `define_id!` macro), trait definitions                                                                               | `CoreError`, `Host`, `HostId`/`SessionId`/`ChannelId`, `ConnectionConfig`, `AuthMethod`, `SessionState`, `ChannelType`, `ChannelState`, `PtySize`, `HostKeyInfo`, `Config`, `HostRepository`, `KnownHostsProvider`, `CredentialProvider`, `Credential`, `CredentialKind`                   |
+| `core-event`   | `crates/core-event/`   | Immutable event definitions, broadcast channel dispatcher                                                                                                            | `CoreEvent` (tag-based JSON via `#[serde(tag = "type")]`), `ChannelDispatcher`, `ApplicationEvent`, `SystemEvent`, `ConnectionEvent`, `HostKeyEvent`, `SessionEvent`, `ChannelEvent`, `HostEvent`                                                                                            |
+| `core-runtime` | `crates/core-runtime/` | Application lifecycle, session/channel management, SSH engine (worker message model: keepalive, SFTP and transfers all run inside the per-session worker; reconnect is manual only) | `CoreRuntime`, `Session`, `Channel`, `SshConnection`, `SshConnectionService`, `ConnectionService` trait, `WorkerCommand`, `WorkerHandle`, `KeyringCredentialProvider`                                                                                                                       |
+| `core-storage` | `crates/core-storage/` | SQLite + WAL, schema migrations, `Database::execute()` is the sole DB access gate                                                                                    | `Database`, `SqliteHostRepository`, `SqliteKnownHosts`                                                                                                                                                                                                                                      |
+| `desktop`      | `crates/desktop/`      | Tauri v2 app, IPC bridge, Vue 3 + xterm.js terminal UI                                                                                                               | `AppState`, Tauri commands                                                                                                                                                                                                                                                                  |
 
 ### SSH Connection Pipeline
 
@@ -71,7 +71,7 @@ SshConnection::connect()
   └─ Ready event
 ```
 
-`SshConnection` holds `Option<ssh2::Session>`; disconnects on `Drop`. `Session` owns no ssh2 resources: every SSH operation is posted as a `WorkerCommand` to the per-session worker thread (Active Object model) via `WorkerHandle`, with oneshot replies. The worker serializes connect/disconnect/exec/channel/SFTP/transfer operations, drives the reconnect state machine, sends keepalives, and polls shell reads (`do_idle_work`).
+`SshConnection` holds `Option<ssh2::Session>`; disconnects on `Drop`. `Session` owns no ssh2 resources: every SSH operation is posted as a `WorkerCommand` to the per-session worker thread (Active Object model) via `WorkerHandle`, with oneshot replies. The worker serializes connect/disconnect/exec/channel/SFTP/transfer operations, sends keepalives, and polls shell reads (`do_idle_work`). Reconnect is manual only (frontend-initiated); no reconnect machinery lives in the worker.
 
 `Channel` is a pure handle (id + channel_type + session_id + worker handle). The actual `ssh2::Channel` (Shell with PTY) and `ssh2::Sftp` live inside the worker's `raw_channels` registry. Blocking calls post commands and wait for oneshot replies (usually from `tokio::task::spawn_blocking`). Shell output is emitted as `DataReceived` events by the worker's idle poll loop; `Channel::start_read_loop()` is a compatibility no-op.
 
@@ -89,18 +89,19 @@ Add new event variants to `CoreEvent` enum in `core-event/src/event.rs`. Events 
 
 All commands in `desktop/src/commands.rs`. Shared state: `AppState { runtime, channels }` (via `tauri::State`).
 
-| Command                                                     | Purpose                                                                      |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `get_app_status`                                            | Returns "running" if CoreRuntime is initialized                              |
-| `ping`                                                      | Health check, returns "pong"                                                 |
-| `list_hosts` / `save_host` / `delete_host` / `search_hosts` | Host CRUD                                                                    |
-| `create_session`                                            | Creates Session, returns session_id                                          |
-| `connect_session`                                           | Calls `Session::connect()` in spawn_blocking                                 |
-| `open_shell`                                                | Opens Shell + SFTP channels, returns channel_id (read loop is worker-driven) |
-| `provide_reconnect_credential`                              | Supplies password/passphrase to the waiting reconnect flow                   |
-| `terminal_send_input`                                       | Writes bytes to channel                                                      |
-| `terminal_resize`                                           | Resizes PTY (cols, rows)                                                     |
-| `terminal_close`                                            | Closes session, removes channels                                             |
+| Command                                                     | Purpose                                                                                              |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `get_app_status`                                            | Returns "running" if CoreRuntime is initialized                                                      |
+| `ping`                                                      | Health check, returns "pong"                                                                         |
+| `list_hosts` / `save_host` / `delete_host` / `search_hosts` | Host CRUD                                                                                            |
+| `create_session`                                            | Creates Session, returns session_id                                                                  |
+| `connect_session`                                           | Calls `Session::connect()` in spawn_blocking                                                         |
+| `open_shell`                                                | Opens Shell + SFTP channels, returns channel_id (read loop is worker-driven)                         |
+| `terminal_send_input`                                       | Writes bytes to channel                                                                              |
+| `terminal_resize`                                           | Resizes PTY (cols, rows)                                                                             |
+| `terminal_close`                                            | Closes session, removes channels                                                                     |
+| `load_credential` / `save_credential` / `delete_credential` | OS credential manager CRUD (`kind`: "password" \| "passphrase")                                      |
+| `ping_host`                                                 | Ping diagnostic via system ping (`-n 1` on Windows / `-c 1` elsewhere), returns success + latency_ms |
 
 ### Trait Abstractions
 
@@ -108,26 +109,26 @@ Core traits defined in `core-common`, implemented in `core-storage`:
 
 - `HostRepository` → `SqliteHostRepository` (hosts table)
 - `KnownHostsProvider` → `SqliteKnownHosts` (known_hosts table)
-- `CredentialProvider` → `ConfigCredentialProvider` (stub, delegates to ConnectionConfig)
+- `CredentialProvider` → `KeyringCredentialProvider` (OS credential manager via keyring; storage key: service `jackpot-ssh`, user `{kind}:{host}:{port}:{username}`)
 - `Config` → `DefaultConfig` (reads from Tauri app data dir)
 
 `ConnectionService` trait (defined in `core-runtime`) → `SshConnectionService`.
 
 ### Database
 
-SQLite at `<app_data_dir>/jackpot.db`. WAL mode, foreign keys enabled. `Database::execute()` is the only way to access the connection — never expose `MutexGuard`. Schema tracked in `_schema_version` table; migrations are incremental: v1 (hosts + config tables), v2 (known_hosts table).
+SQLite at `<app_data_dir>/jackpot.db`. WAL mode, foreign keys enabled. `Database::execute()` is the only way to access the connection — never expose `MutexGuard`. Schema tracked in `_schema_version` table; migrations are incremental: v1 (hosts + config tables), v2 (known_hosts table), v3 (hosts.save_password flag column; the password itself lives in the OS credential manager, never SQLite).
 
 ### Keepalive & Reconnect
 
-Both live inside the worker's idle work (`do_idle_work`); the standalone `spawn_keepalive`/`spawn_reconnect` tasks were removed in Stage 6.
+Keepalive lives inside the worker's idle work (`do_idle_work`); the standalone `spawn_keepalive`/`spawn_reconnect` tasks were removed in Stage 6.
 
-Keepalive: the worker sends `keepalive_send()` every 30s of idle time; on failure it disconnects and schedules a reconnect (if a policy is set).
+Keepalive: the worker sends `keepalive_send()` every 30s of idle time; on failure it disconnects and broadcasts `SessionEvent::Disconnected` (which carries a `reason` field). Disconnect-on-error semantics: any real channel I/O error (read/write, non-EAGAIN) also triggers an active disconnect with reason, so a dead connection always surfaces a `Disconnected` event.
 
-Reconnect: a worker-internal state machine (`Idle → Backoff → AwaitingCredential → Idle`) with exponential backoff (`base_delay * 2^(attempt-1)`, capped at `max_delay`; `max_retries = 0` means no reconnect). Password/passphrase-protected profiles broadcast `CredentialEvent::Required` and wait up to 60s for `WorkerCommand::ProvideCredential`. Emits `Reconnecting`, `Reconnected` and `ReconnectFailed` events. `Session::set_reconnect_policy()` syncs the policy to the worker copy.
+Reconnect: manual only — the user decision is "never reconnect proactively". The worker never triggers reconnect; auto-reconnect machinery (state machine, `ReconnectPolicy`, `CredentialEvent`, `provide_reconnect_credential`) was fully removed. After a `Disconnected` event, the frontend may re-initiate via `connect_session` (re-supplying credentials) and `open_shell`.
 
 ### Frontend
 
-Vue 3 Composition API (`<script setup>`). Single `App.vue` with sidebar (host list + search) and main panel (host detail / edit form / terminal). `Terminal.vue` wraps xterm.js with `FitAddon` and `ResizeObserver`.
+Vue 3 Composition API (`<script setup>`). `App.vue` hosts the tab workspace (wrap tab bar + per-tab terminal/SFTP panels + status bar at the left area bottom) and the right-hand host sidebar (host list + search + slide-out form panel + right-click menu). Tabs are matched by `hostId` (name is not unique and can be renamed). `Terminal.vue` wraps xterm.js with `FitAddon` and `ResizeObserver`.
 
 ## Key Conventions
 
