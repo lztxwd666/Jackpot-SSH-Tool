@@ -1204,6 +1204,8 @@ impl Worker {
 /// 错误判定用 is_would_block（错误码匹配 + source 链查找，兜底字符串匹配），
 /// 兼容 ssh2::Error 与包装它的 io::Error（io::Read/io::Write trait 返回 io::Error）
 /// 仅在 worker 线程内调用（sleep 重试不阻塞其他逻辑）
+/// 累计重试时长约 1s 封顶（与旧 sftp_retry 20×50ms 语义一致）：达到上限返回当前
+/// EAGAIN 错误，走调用方统一失败清理路径，避免远端无响应时无限重试
 fn io_retry<T, E>(
     mut op: impl FnMut() -> Result<T, E>,
     cancel: &std::sync::atomic::AtomicBool,
@@ -1211,6 +1213,8 @@ fn io_retry<T, E>(
 where
     E: std::error::Error + 'static,
 {
+    const RETRY_CAP: Duration = Duration::from_millis(1000);
+    let start = Instant::now();
     let mut delay = 2u64;
     loop {
         match op() {
@@ -1218,8 +1222,9 @@ where
             Err(e) => {
                 if crate::ssh::is_would_block(&e)
                     && !cancel.load(std::sync::atomic::Ordering::Relaxed)
+                    && start.elapsed() < RETRY_CAP
                 {
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    std::thread::sleep(Duration::from_millis(delay));
                     delay = (delay * 2).min(32);
                     continue;
                 }
@@ -1472,5 +1477,31 @@ mod tests {
         );
         assert!(r.is_err());
         assert_eq!(calls, 1, "cancel 置位时不得重试");
+    }
+
+    #[test]
+    fn test_io_retry_cap_returns_error() {
+        // 持续 EAGAIN 且无取消：累计约 1s 后必须返回错误，不得无限重试
+        let cancel = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        let r: Result<u64, ssh2::Error> = io_retry(
+            || {
+                Err(ssh2::Error::new(
+                    ssh2::ErrorCode::Session(-37),
+                    "Would block waiting for status message",
+                ))
+            },
+            &cancel,
+        );
+        assert!(r.is_err());
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(950),
+            "应重试至累计约 1s 上限，实际 {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(2500),
+            "不应超过上限过久，实际 {elapsed:?}"
+        );
     }
 }
