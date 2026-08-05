@@ -17,7 +17,7 @@ pub use id::{ChannelId, ConnectionId, HostId, SessionId};
 pub use knownhosts::KnownHostsProvider;
 pub use ssh::{
     AuthMethod, ChannelState, ChannelType, ConnectionConfig, FileEntry, HostKeyInfo, PtySize,
-    ReconnectPolicy, SessionState,
+    SessionState,
 };
 
 /// 初始化全局 tracing 日志订阅器
