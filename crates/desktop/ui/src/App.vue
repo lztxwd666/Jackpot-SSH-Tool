@@ -249,7 +249,8 @@ function cancelPromptPassword() {
 
 // 弹框勾选"保存此密码"且连接认证成功后落库：
 // 先 save_credential 写入 OS 凭据库，再 save_host 更新 save_password 标志（下次连接走静默加载）
-// 只有认证通过（connect_session 成功）才消费；任一失败则不保存（标志不更新，行为可回退）
+// 只有认证通过（connect_session 成功）才消费；save_credential 失败则不落库；
+// save_host 失败时凭据已落库但标志未更新（下次连接仍走弹框，行为可回退）
 async function applyPendingCredential() {
   const pc = pendingSaveCredential.value
   if (!pc) return
@@ -365,8 +366,10 @@ async function handleHostKey(kind: string, detail: any) {
     : t('hostkey.unknown', { host, fp: fingerprint })
   const ok = await confirmDialog(msg, kind === 'Changed' ? t('hostkey.changedTitle') : t('hostkey.confirmTitle'))
   if (!ok) {
-    // 拒绝信任：清理待确认参数与密码；重连场景恢复断连状态（原断开原因保留）
+    // 拒绝信任：清理待确认参数、密码与待保存凭据（拒绝即用户取消，凭据从未认证通过）
+    // 重连场景恢复断连状态（原断开原因保留）
     pendingConnectHost.value = null
+    pendingSaveCredential.value = null
     password.value = ''
     if (targetTab) targetTab.status = 'disconnected'
     return
@@ -374,6 +377,7 @@ async function handleHostKey(kind: string, detail: any) {
   try {
     await invoke('approve_host_key', { host, port: pc.host.port, fingerprint })
     // 批准后自动重连：重连场景继续 doReconnectWith（更新现有标签），首次连接走 doConnectWith
+    // 待保存凭据仅保留在此路径：批准成功后的重试中认证通过才会消费
     pendingConnectHost.value = null
     if (targetTab) {
       await doReconnectWith(pc.host, pc.password || null, targetTab)
@@ -383,6 +387,7 @@ async function handleHostKey(kind: string, detail: any) {
   } catch (e) {
     showToast(t('hostkey.saveFailed', { err: String(e) }), 'error', 5000)
     pendingConnectHost.value = null
+    pendingSaveCredential.value = null
     // 密钥保存失败：重连场景同样恢复断连状态（避免卡在 reconnecting）
     if (targetTab) targetTab.status = 'disconnected'
   }
