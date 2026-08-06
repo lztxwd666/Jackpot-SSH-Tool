@@ -189,15 +189,16 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
     <div class="tree-body">
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="currentPath && parentPath(currentPath) !== currentPath" class="tree-node up-node" @click="goUp">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
+        <!-- 文件夹图标（琥珀色，SVG 无 emoji）：父目录 -->
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
         <span class="name">..</span>
       </div>
       <div v-for="file in files" :key="file.path" class="tree-node" :class="{ selected: selected === file.path }"
         :draggable="!file.is_dir" @click="enterDir(file)" @dblclick="enterDir(file)"
         @dragstart="onDragStart($event, file)" @contextmenu="onContextMenu($event, file)">
-        <!-- 文件夹/文件图标（SVG 无 emoji，项目约定） -->
-        <svg v-if="file.is_dir" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
-        <svg v-else class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+        <!-- 文件夹/文件图标（SVG 无 emoji，项目约定）：文件夹琥珀色、文件中性灰 -->
+        <svg v-if="file.is_dir" class="icon" viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
+        <svg v-else class="icon" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
         <span class="name">{{ file.name }}</span>
         <span v-if="!file.is_dir" class="size">{{ formatFileSize(file.size) }}</span>
       </div>
