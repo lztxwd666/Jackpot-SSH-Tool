@@ -3,7 +3,7 @@
 
 mod sftp;
 
-use core_common::{ChannelId, ChannelState, ChannelType, CoreError, CoreResult, PtySize, SessionId};
+use core_common::{ChannelId, ChannelType, CoreError, CoreResult, PtySize, SessionId};
 use core_event::event::{ChannelEvent, CoreEvent};
 use core_event::EventDispatcher;
 use std::sync::Arc;
@@ -71,25 +71,7 @@ impl Channel {
         )
     }
 
-    /// 启动后台读循环（worker 模型下读循环由 do_idle_work 承担，此为兼容 no-op）
-    pub fn start_read_loop(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async {})
-    }
-
-    /// 读取通道数据（worker 模型下由 do_idle_work 承担，此为兼容 no-op）
-    pub async fn read(&self, _len: usize) -> CoreResult<usize> {
-        Ok(0)
-    }
-
-    pub fn state(&self) -> ChannelState {
-        ChannelState::Open
-    }
-
-    pub fn is_open(&self) -> bool {
-        true
-    }
-
-    // ========== SFTP 方法（Task 5 迁移至 worker：投递命令 + 等待回执，见 sftp.rs） ==========
+    // SFTP 方法（Task 5 迁移至 worker：投递命令 + 等待回执，见 sftp.rs）
 }
 
 /// 创建 Shell 通道的原始 ssh2::Channel（供 worker 调用，不注册到外部队列）

@@ -64,6 +64,7 @@ impl CoreRuntime {
 
     /// 启动运行时：打开数据库、执行迁移、初始化连接服务和 KnownHosts Provider
     /// 防止重复启动，二次调用返回 Internal error
+    /// 初始化中途失败会回滚 running 标志（否则滞留半初始化态且不可重试）
     pub async fn start(&self) -> CoreResult<()> {
         {
             let mut running = self.running.write().await;
@@ -75,6 +76,16 @@ impl CoreRuntime {
             *running = true;
         }
 
+        let result = self.start_inner().await;
+        if result.is_err() {
+            let mut running = self.running.write().await;
+            *running = false;
+        }
+        result
+    }
+
+    /// start 的实际初始化逻辑（running 标志已置位；失败由 start 回滚）
+    async fn start_inner(&self) -> CoreResult<()> {
         self.dispatcher
             .dispatch(CoreEvent::Application(ApplicationEvent::Started));
 

@@ -178,10 +178,9 @@ pub async fn sftp_download_file(
             let local_hash = local_hash.map_err(|e| e.to_string())?;
             if !rh.eq_ignore_ascii_case(&local_hash) {
                 // 校验失败：删除不完整的本地文件并报错
+                // 不回传哈希值（内容指纹可能被离线枚举，非必要信息）
                 let _ = std::fs::remove_file(&lp);
-                return Err(format!(
-                    "checksum mismatch: remote {rh}, local {local_hash}"
-                ));
+                return Err("checksum mismatch, downloaded file removed".into());
             }
         }
     }
@@ -260,11 +259,9 @@ pub async fn sftp_upload_file(
         Some(rh) => {
             let local_hash = local_hash.map_err(|e| e.to_string())?;
             if !rh.eq_ignore_ascii_case(&local_hash) {
-                // 校验失败：删除损坏的远端文件并报错
+                // 校验失败：删除损坏的远端文件并报错（不回传哈希值，见下载侧注释）
                 let _ = ch_verify.sftp_remove_file(&rp);
-                return Err(format!(
-                    "checksum mismatch: remote {rh}, local {local_hash}"
-                ));
+                return Err("checksum mismatch, uploaded file removed".into());
             }
         }
     }

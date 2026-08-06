@@ -42,14 +42,11 @@ pub fn run() {
                 }
 
                 // 事件转发循环：CoreRuntime → Tauri IPC → Vue 前端
+                // 直接 emit 事件对象（Tauri 统一序列化一次；前端拿到已解析对象，无需二次 parse）
                 loop {
                     match event_rx.recv().await {
                         Ok(event) => {
-                            let payload = serde_json::to_string(&event).unwrap_or_else(|e| {
-                                tracing::error!(%e, "failed to serialize event");
-                                "{}".into()
-                            });
-                            if let Err(e) = app_handle.emit("core-event", payload) {
+                            if let Err(e) = app_handle.emit("core-event", &event) {
                                 tracing::error!(%e, "failed to emit core-event");
                             }
                         }

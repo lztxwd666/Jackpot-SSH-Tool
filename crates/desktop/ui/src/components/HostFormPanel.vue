@@ -54,6 +54,11 @@ watch(groupSelect, (v) => {
   }
 })
 
+// 切换认证类型时清空密码/口令：跨类型残留的明文不得随新类型落库（如 password → private_key）
+watch(() => form.value.auth_type, () => {
+  form.value.password = ''
+})
+
 // 打开时按模式装载初始值；编辑模式不回显密码（保留 save_password 勾选状态）
 watch(() => props.open, (v) => {
   if (v) {

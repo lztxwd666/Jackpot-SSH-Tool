@@ -65,7 +65,7 @@ export function closeDialog(result: DialogResult) {
   dialogState.visible = false
 }
 
-// ---- Toast 提示 ----
+// Toast 提示
 
 export interface Toast {
   id: number

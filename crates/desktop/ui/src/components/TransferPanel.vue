@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // 传输进度面板：展示所有进行中的下载/上传任务及实时进度
 
+import { formatFileSize } from '../composables/fs'
+
 export interface TransferTask {
   id: string
   name: string
@@ -15,12 +17,6 @@ function pct(t: TransferTask): number {
   if (!t.total) return 0
   return Math.min(100, Math.round((t.done / t.total) * 100))
 }
-function fmt(n: number): string {
-  if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
-  if (n >= 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB'
-  if (n >= 1024) return (n / 1024).toFixed(1) + ' KB'
-  return n + ' B'
-}
 </script>
 
 <template>
@@ -31,7 +27,7 @@ function fmt(n: number): string {
         <div class="t-fill" :style="{ width: pct(tr) + '%' }"></div>
       </div>
       <span class="t-pct">{{ pct(tr) }}%</span>
-      <span class="t-size">{{ fmt(tr.done) }} / {{ fmt(tr.total) }}</span>
+      <span class="t-size">{{ formatFileSize(tr.done) }} / {{ formatFileSize(tr.total) }}</span>
     </div>
   </div>
 </template>

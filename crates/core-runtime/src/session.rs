@@ -136,11 +136,6 @@ impl Session {
         Ok(Channel::new(cid, ctype, self.id, self.worker.clone()))
     }
 
-    /// 获取当前所有通道的快照（通道注册表在 worker 内，对外快照由 desktop 维护）
-    pub fn channels(&self) -> Vec<Arc<Channel>> {
-        Vec::new()
-    }
-
     /// 计算远程文件的 SHA-256 校验和；远端无可用哈希命令或 exec 失败时返回 None（跳过校验）
     /// 命令探测与解析在 worker 内完成（会话级缓存），输出格式按命令区分解析
     pub fn remote_sha256(&self, path: &str) -> CoreResult<Option<String>> {

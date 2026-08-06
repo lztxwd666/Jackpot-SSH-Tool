@@ -3,6 +3,7 @@
 // 含搜索栏；主机列表按分组自动组织（分组标题 + 组内主机）
 // 语言切换已移至左侧底部状态栏（用户反馈：主机栏与底栏分离，底栏后续放设置图标等功能）
 import { computed, ref } from 'vue'
+import { clampFloatPos } from '../composables/pos'
 import { t } from '../composables/i18n'
 
 // 与后端 list_hosts 返回的 Host 结构一致（前端 host 列表即为完整 Host，不做收窄）
@@ -44,13 +45,19 @@ const TIP_WIDTH = 200
 const TIP_HEIGHT = 150
 const tip = ref<{ x: number; y: number; host: Host } | null>(null)
 function showTip(e: MouseEvent, host: Host) {
-  tip.value = {
-    x: Math.max(8, Math.min(e.clientX + 12, window.innerWidth - TIP_WIDTH - 12)),
-    y: Math.max(8, Math.min(e.clientY + 12, window.innerHeight - TIP_HEIGHT - 12)),
-    host,
-  }
+  // 右键菜单打开时不显示悬停卡（两浮层不重叠）
+  if (menu.value) return
+  const p = clampFloatPos(e.clientX + 12, e.clientY + 12, TIP_WIDTH, TIP_HEIGHT)
+  tip.value = { x: p.x, y: p.y, host }
 }
 function hideTip() { tip.value = null }
+
+// 右键菜单位置 clamp（估算宽高，防贴窗口右缘溢出被裁剪）
+const menuStyle = computed(() => {
+  if (!menu.value) return { left: '0px', top: '0px' }
+  const p = clampFloatPos(menu.value.x, menu.value.y, 140, 140)
+  return { left: p.x + 'px', top: p.y + 'px' }
+})
 
 // 认证方式显示名（与主机表单下拉文案一致；未知类型保留原值）
 function authLabel(authType: string): string {
@@ -103,7 +110,7 @@ function onSearchInput(e: Event) {
       <input :value="searchQuery" type="text" :placeholder="t('hosts.searchPlaceholder')" @input="onSearchInput" />
     </div>
     <div class="host-list">
-      <template v-for="[groupName, groupHosts] in groupedHosts" :key="groupName || '__unassigned__'">
+      <template v-for="([groupName, groupHosts], groupIdx) in groupedHosts" :key="(groupName || '__unassigned__') + ':' + groupIdx">
         <div class="group-header">{{ groupName || t('hosts.groupUnassigned') }}</div>
         <ul>
           <li v-for="host in groupHosts" :key="host.id"
@@ -119,7 +126,7 @@ function onSearchInput(e: Event) {
         </ul>
       </template>
     </div>
-    <div v-if="menu" class="context-menu" :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
+    <div v-if="menu" class="context-menu" :style="menuStyle">
       <div class="menu-item" @click="pick('connect')">{{ t('common.connect') }}</div>
       <div class="menu-item" @click="pick('edit')">{{ t('common.edit') }}</div>
       <div class="menu-item" @click="pick('ping')">{{ t('common.ping') }}</div>

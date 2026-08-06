@@ -16,10 +16,9 @@ pub async fn get_home_dir() -> Result<String, String> {
 }
 
 
-/// 列出本地目录内容
-/// 当 path 为空时列出驱动器（Windows）或根目录（其他平台）
-#[tauri::command]
-pub async fn read_local_dir(path: String) -> Result<Vec<FileEntry>, String> {
+/// 目录列举逻辑（阻塞版，供 spawn_blocking 调用：read_dir/metadata 可能因
+/// 网络驱动器/慢盘阻塞数秒，不得占用 tokio worker 线程）
+fn read_local_dir_blocking(path: &str) -> Result<Vec<FileEntry>, String> {
     // 空路径或根路径 → 列出驱动器
     if path.is_empty() || path == "\\" || path == "/" {
         return list_drives();
@@ -28,7 +27,7 @@ pub async fn read_local_dir(path: String) -> Result<Vec<FileEntry>, String> {
     let path = if path.len() == 2 && path.ends_with(':') {
         format!("{}\\", path)
     } else {
-        path
+        path.to_string()
     };
 
     let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
@@ -60,11 +59,29 @@ pub async fn read_local_dir(path: String) -> Result<Vec<FileEntry>, String> {
     Ok(files)
 }
 
+/// 列出本地目录内容
+/// 当 path 为空时列出驱动器（Windows）或根目录（其他平台）
+#[tauri::command]
+pub async fn read_local_dir(path: String) -> Result<Vec<FileEntry>, String> {
+    tokio::task::spawn_blocking(move || read_local_dir_blocking(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
-/// 读取本地文件内容
+/// 读取本地文件内容（上限 10MB：防御大文件经 IPC 撑爆内存与序列化开销；大文件请走 sftp 传输）
+const READ_LOCAL_FILE_CAP: u64 = 10 * 1024 * 1024;
+
 #[tauri::command]
 pub async fn read_local_file(path: String) -> Result<Vec<u8>, String> {
-    std::fs::read(&path).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        if size > READ_LOCAL_FILE_CAP {
+            return Err(format!("file too large: {size} bytes (cap 10MB)"));
+        }
+        std::fs::read(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
@@ -104,38 +121,54 @@ fn list_drives() -> Result<Vec<FileEntry>, String> {
 }
 
 
-/// 写入本地文件
+/// 写入本地文件（spawn_blocking：文件 IO 不占用 tokio worker 线程）
 #[tauri::command]
 pub async fn write_local_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    if let Some(parent) = std::path::Path::new(&path).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, &data).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        if let Some(parent) = std::path::Path::new(&path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, &data).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
-/// 重命名本地文件或目录
+/// 重命名本地文件或目录（spawn_blocking）
 #[tauri::command]
 pub async fn rename_local_file(old_path: String, new_path: String) -> Result<(), String> {
-    std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        std::fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
-/// 删除本地文件或目录
+/// 删除本地文件或目录（spawn_blocking；remove_dir_all 递归删除可能耗时）
 #[tauri::command]
 pub async fn delete_local_file(path: String, is_dir: bool) -> Result<(), String> {
-    if is_dir {
-        std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
-    } else {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
-    }
+    tokio::task::spawn_blocking(move || {
+        if is_dir {
+            std::fs::remove_dir_all(&path).map_err(|e| e.to_string())
+        } else {
+            std::fs::remove_file(&path).map_err(|e| e.to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 
-/// 创建本地目录
+/// 创建本地目录（spawn_blocking）
 #[tauri::command]
 pub async fn create_local_dir(path: String) -> Result<(), String> {
-    std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 

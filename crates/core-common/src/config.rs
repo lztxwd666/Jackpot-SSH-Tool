@@ -9,7 +9,7 @@ pub trait Config: Send + Sync {
     fn log_level(&self) -> &str;
 }
 
-/// Config trait 的默认实现，从 Tauri app data dir 读取路径
+/// Config trait 的默认实现（纯注入：路径与日志级别由调用方提供，本类型不读取任何配置）
 pub struct DefaultConfig {
     data_dir: std::path::PathBuf,
     log_level: String,

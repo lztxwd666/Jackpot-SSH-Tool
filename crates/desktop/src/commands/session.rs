@@ -34,6 +34,13 @@ pub async fn connect_session(
 
     let sid = SessionId::parse(&session_id)?;
     let session = rt.get_session(&sid).await.ok_or("session not found")?;
+    // known_hosts 为 None 表示运行时尚未完成初始化：拒绝连接而非跳过主机密钥校验
+    let known_hosts = rt
+        .known_hosts()
+        .await
+        .ok_or("runtime not ready: known hosts provider unavailable")?;
+    // 取到 Arc 后立即释放读锁：后续 spawn_blocking 长连接期间不持有 runtime 锁
+    drop(guard);
 
     let auth = match auth_type.as_str() {
         "password" => core_common::AuthMethod::Password(password.unwrap_or_default()),
@@ -48,12 +55,6 @@ pub async fn connect_session(
         _ => return Err(format!("unsupported auth type: {auth_type}")),
     };
     let config = ConnectionConfig::new(host, username, auth).with_port(port);
-
-    // known_hosts 为 None 表示运行时尚未完成初始化：拒绝连接而非跳过主机密钥校验
-    let known_hosts = rt
-        .known_hosts()
-        .await
-        .ok_or("runtime not ready: known hosts provider unavailable")?;
 
     let session_clone = session.clone();
     tokio::task::spawn_blocking(move || session_clone.connect(config, Some(known_hosts)))
@@ -73,6 +74,7 @@ pub async fn open_shell(
     let guard = state.runtime.read().await;
     let rt = guard.as_ref().ok_or("runtime not initialized")?;
     let session = rt.get_session(&sid).await.ok_or("session not found")?;
+    drop(guard); // 取到 Arc 后立即释放读锁，spawn_blocking 期间不持有 runtime 锁
 
     // 合并为单次 spawn_blocking：shell 与 sftp 通道共享同一连接锁，串行执行减少线程池往返
     let session_clone = session.clone();
@@ -90,6 +92,8 @@ pub async fn open_shell(
 
     {
         let mut channels = state.channels.write().await;
+        // 清理同会话的旧通道条目（手动重连场景旧 channel 已失效，防注册表残留）
+        channels.retain(|_, ch| ch.session_id != sid);
         channels.insert(channel_id, channel.clone());
     }
 
@@ -133,8 +137,12 @@ pub async fn terminal_send_input(
 ) -> Result<(), String> {
     let cid = ChannelId::parse(&channel_id)?;
 
-    let channels = state.channels.read().await;
-    let channel = channels.get(&cid).ok_or("channel not found")?;
+    // clone 后立即释放读锁：channel.write 可能长时间等待 worker（传输期间命令延后），
+    // 不得持 channels 锁跨 await（阻塞 open_shell/terminal_close 的写锁）
+    let channel = {
+        let channels = state.channels.read().await;
+        channels.get(&cid).ok_or("channel not found")?.clone()
+    };
     channel.write(data.into_bytes()).await.map_err(|e| {
         tracing::error!(%cid, %e, "terminal_send_input failed");
         e.to_string()

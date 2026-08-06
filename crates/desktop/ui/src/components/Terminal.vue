@@ -39,19 +39,24 @@ onMounted(async () => {
     }, 150)
   })
 
-  fitAddon.fit()
-  term.focus()
+  // 容器隐藏（后台标签 v-show 挂载）时跳过初始 fit：fit 会把 PTY resize 成 1x1，
+  // 显示后由 ResizeObserver（尺寸 0 变为实际值）触发正确 fit
+  if (terminalRef.value!.offsetWidth > 0) {
+    fitAddon.fit()
+    term.focus()
 
-  // 第一次 fit 后手动发送 PTY 尺寸
-  invoke('terminal_resize', {
-    channelId: props.channelId,
-    cols: term.cols,
-    rows: term.rows,
-  }).catch(() => {})
+    // 第一次 fit 后手动发送 PTY 尺寸
+    invoke('terminal_resize', {
+      channelId: props.channelId,
+      cols: term.cols,
+      rows: term.rows,
+    }).catch(() => {})
+  }
 
-  unlisten = await listen<string>('core-event', (event) => {
+  unlisten = await listen<any>('core-event', (event) => {
     try {
-      const parsed = JSON.parse(event.payload)
+      // payload 为后端 emit 的事件对象（Tauri 已序列化传输，无需二次 parse）
+      const parsed = event.payload
       if (parsed.type === 'Channel' && parsed.payload.kind === 'DataReceived') {
         if (parsed.payload.detail.channel_id === props.channelId) {
           // data 为 base64 编码的字节串（后端 serde_with::base64）
@@ -77,6 +82,9 @@ onMounted(async () => {
   })
 
   observer = new ResizeObserver(() => {
+    // 隐藏标签（v-show 切换）容器尺寸归零：跳过 fit，防止后台 TUI 被 resize 成 1x1
+    const el = terminalRef.value
+    if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return
     fitAddon.fit()
   })
   observer.observe(terminalRef.value!)

@@ -55,16 +55,20 @@ pub(crate) enum HashCommand {
 }
 
 /// 按命令类型解析哈希输出；无法解析返回 None
+/// Openssl/BsdSha256 输出形如 "SHA2-256(/path)= hash"：路径可能含 '=' 或空格，
+/// 从尾部提取 64 位十六进制 token 最稳健（哈希值固定格式，路径内容不干扰）
 pub(crate) fn parse_hash_output(cmd: &HashCommand, out: &str) -> Option<String> {
     match cmd {
         HashCommand::Sha256sum | HashCommand::Shasum => {
             out.split_whitespace().next().map(|s| s.to_string())
         }
         HashCommand::Openssl | HashCommand::BsdSha256 => out
-            .split('=')
-            .nth(1)
-            .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
-            .filter(|s| !s.is_empty()),
+            .split_whitespace()
+            .rev()
+            .find(|s| {
+                s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+            })
+            .map(|s| s.to_string()),
     }
 }
 
@@ -401,11 +405,12 @@ impl Worker {
             None => return Ok(None),
         };
         let escaped = path.replace('\'', "'\\''");
+        // -- 结束选项解析：以 - 开头的路径不会被当作选项（sha256sum/shasum 已带，补全 bsd/openssl）
         let command = match cmd {
             HashCommand::Sha256sum => format!("sha256sum -- '{}'", escaped),
             HashCommand::Shasum => format!("shasum -a 256 -- '{}'", escaped),
-            HashCommand::BsdSha256 => format!("sha256 '{}'", escaped),
-            HashCommand::Openssl => format!("openssl dgst -sha256 '{}'", escaped),
+            HashCommand::BsdSha256 => format!("sha256 -- '{}'", escaped),
+            HashCommand::Openssl => format!("openssl dgst -sha256 -- '{}'", escaped),
         };
         let out = match self.exec_inner(&command) {
             Ok(out) => out,
@@ -499,6 +504,7 @@ impl Worker {
     }
 
     /// 关闭通道（清理 ssh2 资源并广播 Closed 事件）
+    /// 通道不存在时静默返回（重复关闭/已清理的场景不重复广播 Closed 事件）
     fn channel_close_inner(&mut self, channel: ChannelId) -> CoreResult<()> {
         if let Some(inner) = self.raw_channels.remove(&channel) {
             match inner {
@@ -508,12 +514,12 @@ impl Worker {
                 }
                 ChannelInner::Sftp(_) => {}
             }
+            self.channels.retain(|c| *c != channel);
+            self.dispatch(CoreEvent::Channel(ChannelEvent::Closed {
+                session_id: self.session_id(),
+                channel_id: channel,
+            }));
         }
-        self.channels.retain(|c| *c != channel);
-        self.dispatch(CoreEvent::Channel(ChannelEvent::Closed {
-            session_id: self.session_id(),
-            channel_id: channel,
-        }));
         Ok(())
     }
 
@@ -944,7 +950,11 @@ impl Worker {
         };
         let mut buf = [0u8; 4096];
         match ch.read(&mut buf) {
-            Ok(0) => Ok(()), // EOF：通道已由远端关闭，正常结束
+            Ok(0) => {
+                // EOF：通道已由远端关闭，清理本地通道资源并广播 Closed（停止无谓轮询）
+                self.channel_close_inner(channel)?;
+                Ok(())
+            }
             Ok(n) => {
                 let data = Vec::from(&buf[..n]);
                 self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
@@ -1163,17 +1173,20 @@ mod tests {
 
     #[test]
     fn test_parse_hash_output_openssl() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        // 路径含 '=' 与空格：新逻辑从尾部提取 64 位 hex，不受路径内容干扰
         assert_eq!(
-            parse_hash_output(&HashCommand::Openssl, "SHA2-256(/etc/file)= abc123").as_deref(),
-            Some("abc123")
+            parse_hash_output(&HashCommand::Openssl, &format!("SHA2-256(/etc/a=b c)= {hash}")).as_deref(),
+            Some(hash)
         );
     }
 
     #[test]
     fn test_parse_hash_output_bsd() {
+        let hash = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         assert_eq!(
-            parse_hash_output(&HashCommand::BsdSha256, "SHA256 (/etc/file) = abc123").as_deref(),
-            Some("abc123")
+            parse_hash_output(&HashCommand::BsdSha256, &format!("SHA256 (/etc/file) = {hash}")).as_deref(),
+            Some(hash)
         );
     }
 

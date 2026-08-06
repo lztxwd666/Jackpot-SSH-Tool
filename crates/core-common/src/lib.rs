@@ -22,15 +22,16 @@ pub use ssh::{
 
 /// 初始化全局 tracing 日志订阅器
 /// 优先使用环境变量 RUST_LOG，fallback 到传入的 level 参数
+/// 幂等：全局已存在订阅器时静默忽略（二次调用不 panic）
 pub fn init_logging(level: &str) {
     use tracing_subscriber::EnvFilter;
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_target(false)
         .with_thread_ids(false)
         .with_thread_names(false)
-        .init();
+        .try_init();
 }

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
+import { formatFileSize, isValidNewName } from '../composables/fs'
+import { clampFloatPos } from '../composables/pos'
 import { t } from '../composables/i18n'
 
 // 自定义 MIME 类型：dragover 期间 getData() 不可读，只能读 types
@@ -35,6 +37,11 @@ const showMenu = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 const menuTarget = ref<FileNode | null>(null)
+// 菜单位置 clamp（估算宽高，防贴窗口右缘/下缘时溢出被裁剪）
+const menuStyle = computed(() => {
+  const p = clampFloatPos(menuX.value, menuY.value, 140, 140)
+  return { left: p.x + 'px', top: p.y + 'px' }
+})
 
 function parentPath(p: string): string {
   const stripped = p.replace(/\\$/, '')
@@ -130,6 +137,8 @@ async function doNewFolder() {
   closeMenu()
   const name = await promptDialog(t('prompt.folderName'))
   if (!name) return
+  // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
+  if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
   const path = currentPath.value.replace(/\\$/, '') + '\\' + name
   try {
     await invoke('create_local_dir', { path })
@@ -144,6 +153,8 @@ async function doRename() {
   const target = menuTarget.value
   const newName = await promptDialog(t('prompt.newName'), target.name)
   if (!newName || newName === target.name) return
+  // 校验名称：拒绝路径分隔符与 ..（防移动到目录外）
+  if (!isValidNewName(newName)) { showToast(t('toast.invalidName'), 'error', 4000); return }
   const parent = currentPath.value.replace(/\\$/, '')
   try {
     await invoke('rename_local_file', { oldPath: target.path, newPath: parent + '\\' + newName })
@@ -178,20 +189,22 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
     <div class="tree-body">
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="currentPath && parentPath(currentPath) !== currentPath" class="tree-node up-node" @click="goUp">
-        <span class="icon">📂</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
         <span class="name">..</span>
       </div>
       <div v-for="file in files" :key="file.path" class="tree-node" :class="{ selected: selected === file.path }"
         :draggable="!file.is_dir" @click="enterDir(file)" @dblclick="enterDir(file)"
         @dragstart="onDragStart($event, file)" @contextmenu="onContextMenu($event, file)">
-        <span class="icon">{{ file.is_dir ? '📁' : '📄' }}</span>
+        <!-- 文件夹/文件图标（SVG 无 emoji，项目约定） -->
+        <svg v-if="file.is_dir" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
+        <svg v-else class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
         <span class="name">{{ file.name }}</span>
-        <span v-if="!file.is_dir" class="size">{{ (file.size / 1024).toFixed(0) }}K</span>
+        <span v-if="!file.is_dir" class="size">{{ formatFileSize(file.size) }}</span>
       </div>
     </div>
 
-    <!-- 右键菜单 -->
-    <div v-if="showMenu" class="context-menu" :style="{ left: menuX + 'px', top: menuY + 'px' }">
+    <!-- 右键菜单（clamp 防溢出窗口边缘） -->
+    <div v-if="showMenu" class="context-menu" :style="menuStyle">
       <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doUploadToRemote">{{ t('common.upload') }}
       </div>
       <div class="menu-item" @click="doNewFolder">{{ t('common.newFolder') }}</div>
@@ -249,6 +262,8 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 
 .icon {
   flex-shrink: 0;
+  width: 14px;
+  height: 14px;
 }
 
 .name {
@@ -261,6 +276,7 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
   font-size: 0.7rem;
   opacity: 0.5;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .loading {

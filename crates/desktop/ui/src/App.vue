@@ -9,7 +9,7 @@ import ToastStack from './components/ToastStack.vue'
 import SessionTab, { type SessionTabState, type TabNotice } from './components/SessionTab.vue'
 import { routeCoreEvent } from './composables/events'
 import { dialogState, closeDialog, confirmDialog, showToast } from './composables/dialog'
-import { t, getLocale, setLocale, type Locale } from './composables/i18n'
+import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
 interface PingResult {
@@ -658,8 +658,9 @@ onMounted(async () => {
   await loadHosts()
   // 获取用户主目录（下载兜底目标）
   try { homeDir.value = await invoke('get_home_dir') } catch (_) {}
-  unlistenCore = await listen<string>('core-event', (event) => {
-    const parsed = JSON.parse(event.payload)
+  unlistenCore = await listen<any>('core-event', (event) => {
+    // 后端直接 emit 事件对象（Tauri 序列化一次），payload 已是解析后对象，无需二次 parse
+    const parsed = event.payload
     // 非会话级事件（不带 session_id）：仍在本地处理
     if (parsed.type === 'Host') loadHosts()
     // 主机密钥确认流程：Unknown（首次）/ Changed（变更）
@@ -667,13 +668,15 @@ onMounted(async () => {
       handleHostKey(parsed.payload.kind, parsed.payload?.detail)
     }
     // 会话级事件：按 session_id 路由到对应标签
-    routeCoreEvent(event.payload, {
+    routeCoreEvent(parsed, {
       // onSession 完整状态机接线：Connecting / Connected / Disconnected（同时维护状态条 notices）
       onSession: (sid, kind, detail) => {
         const tab = tabs.value.find(t => t.sessionId === sid)
         if (!tab) return
         if (kind === 'Connecting') {
           tab.status = 'connecting'
+          // 手动重连场景已显示"正在重连"提示：不叠加"正在连接"（语义重复）
+          if (tab.notices.some(n => n.id === 'reconnecting')) return
           upsertNotice(tab, { id: 'connecting', level: 'info', message: t('tab.connecting') })
         } else if (kind === 'Connected') {
           // 已放弃的会话（流程超时取消）：迟到事件不得翻回状态（通道未重建，翻回会
@@ -778,9 +781,9 @@ onBeforeUnmount(() => {
       />
       <!-- 右侧底部栏：与主机栏切割开的独立栏位（用户反馈：语言切换 + 后续设置图标等功能） -->
       <div class="right-footer">
+        <!-- 语言选择器由 locales 数据驱动：新增语言只需在 i18n.ts 添加 locale 与 localeNames -->
         <select class="locale-select" :value="locale" @change="onLocaleChange(($event.target as HTMLSelectElement).value as Locale)">
-          <option value="en">English</option>
-          <option value="zh">中文</option>
+          <option v-for="l in locales" :key="l" :value="l">{{ localeNames[l] }}</option>
         </select>
         <!-- 预留：设置图标等（后续） -->
       </div>

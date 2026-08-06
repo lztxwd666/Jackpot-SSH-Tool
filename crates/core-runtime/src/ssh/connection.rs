@@ -100,7 +100,12 @@ impl SshConnection {
         let host_key_info = check_host_key(&session, &self.config.host, self.config.port)?;
 
         if let Some(ref known_hosts) = self.known_hosts {
-            match known_hosts.find_host_key(&self.config.host, self.config.port)? {
+            // 按 key_type 匹配：同主机多密钥类型并存互不覆盖（V4 起唯一键含 key_type）
+            match known_hosts.find_host_key(
+                &self.config.host,
+                self.config.port,
+                &host_key_info.key_type,
+            )? {
                 None => {
                     // 未知主机密钥：发出事件并中止连接（TOFU 流程）
                     // 用户确认后通过 approve_host_key 存储密钥，然后重新连接
@@ -199,6 +204,8 @@ impl SshConnection {
 
         // 读取输出（非阻塞模式下可能 EAGAIN）
         // 累积原始字节，最后一次性解码：避免多字节 UTF-8 跨块边界被 from_utf8_lossy 损坏
+        // 输出上限：exec 为公开方法，防御未来大输出场景撑爆内存（当前调用方哈希探测输出很小）
+        const EXEC_OUTPUT_CAP: usize = 1024 * 1024;
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
@@ -206,6 +213,11 @@ impl SshConnection {
                 .map_err(|e| core_common::CoreError::Internal(format!("exec read failed: {e}")))?;
             if n == 0 {
                 break; // EOF
+            }
+            if raw.len() + n > EXEC_OUTPUT_CAP {
+                return Err(core_common::CoreError::Internal(
+                    "exec output exceeds 1MB cap".into(),
+                ));
             }
             raw.extend_from_slice(&buf[..n]);
         }

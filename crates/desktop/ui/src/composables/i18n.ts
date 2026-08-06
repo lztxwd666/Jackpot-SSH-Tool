@@ -13,6 +13,9 @@ export type Locale = 'en' | 'zh'
 
 export const locales: Locale[] = ['en', 'zh']
 
+// 语言自名（语言选择器选项展示用：母语展示是通用惯例，非 UI 翻译字符串）
+export const localeNames: Record<Locale, string> = { en: 'English', zh: '中文' }
+
 const STORAGE_KEY = 'jackpot-locale'
 
 function loadStoredLocale(): Locale {
@@ -148,6 +151,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.notConnected': 'Not connected to any host',
     'toast.systemFileDrop': 'Please use the local file tree to upload files',
     'toast.hostNotFound': 'Host not found',
+    'toast.invalidName': 'Invalid name: cannot contain / \\ or ..',
   },
   zh: {
     // 通用按钮
@@ -273,6 +277,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.notConnected': '尚未连接到任何主机',
     'toast.systemFileDrop': '请使用左侧本地文件树上传文件',
     'toast.hostNotFound': '主机不存在',
+    'toast.invalidName': '名称无效：不能包含 / \\ 或 ..',
   },
 }
 

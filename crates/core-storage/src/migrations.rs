@@ -4,7 +4,7 @@
 use core_common::CoreResult;
 
 /// 当前数据库 schema 版本号
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 /// V1 初始 schema：hosts 表存储 SSH 主机信息，config 表存储键值对配置
 /// version 设为主键，防止重复执行迁移时插入重复版本行
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS config (
 );
 ";
 
-/// V2 已知主机密钥表
+/// V2 已知主机密钥表（created_at 与 host_repo 的 ISO 格式一致：T 分隔、UTC、无时区后缀）
 const MIGRATION_V2: &str = "
 CREATE TABLE IF NOT EXISTS known_hosts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS known_hosts (
     port INTEGER NOT NULL DEFAULT 22,
     key_type TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
     UNIQUE(host, port)
 );
 ";
@@ -49,6 +49,28 @@ CREATE TABLE IF NOT EXISTS known_hosts (
 /// V3：hosts 表增加 save_password 列（保存密码勾选标志；密码本体在 OS 凭据库，绝不在 SQLite）
 const MIGRATION_V3: &str = "
 ALTER TABLE hosts ADD COLUMN save_password INTEGER NOT NULL DEFAULT 0;
+";
+
+/// V4：known_hosts 唯一键扩展为 (host, port, key_type)，支持同主机多密钥类型并存
+/// （旧约束下 ssh-rsa 与 ssh-ed25519 互相覆盖，密钥轮换被误报 Changed）；
+/// 同时把旧行 created_at 的空格分隔格式统一为 T 分隔（与 host_repo 一致）
+const MIGRATION_V4: &str = "
+CREATE TABLE known_hosts_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL DEFAULT 22,
+    key_type TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+    UNIQUE(host, port, key_type)
+);
+INSERT INTO known_hosts_new (host, port, key_type, fingerprint, created_at)
+SELECT host, port, key_type, fingerprint,
+    CASE WHEN instr(created_at, 'T') > 0 THEN created_at
+         ELSE replace(created_at, ' ', 'T') END
+FROM known_hosts;
+DROP TABLE known_hosts;
+ALTER TABLE known_hosts_new RENAME TO known_hosts;
 ";
 
 /// 运行所有必要的迁移脚本，将 schema 从当前版本升级到 SCHEMA_VERSION
@@ -95,10 +117,21 @@ pub fn run_migrations(conn: &mut rusqlite::Connection) -> CoreResult<()> {
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tx.execute(
             "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
-            [SCHEMA_VERSION],
+            [3],
         )
         .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
         tracing::info!("database migrated to version 3");
+    }
+
+    if current_version < 4 {
+        tx.execute_batch(MIGRATION_V4)
+            .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        tx.execute(
+            "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
+            [SCHEMA_VERSION],
+        )
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+        tracing::info!("database migrated to version 4");
     }
 
     tx.commit()

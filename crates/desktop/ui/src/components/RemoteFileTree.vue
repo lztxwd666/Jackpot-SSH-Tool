@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
+import { formatFileSize, isValidNewName } from '../composables/fs'
+import { clampFloatPos } from '../composables/pos'
 import { t } from '../composables/i18n'
 
 // 自定义 MIME 类型：dragover 期间 getData() 不可读，只能读 types
@@ -33,6 +35,11 @@ const showMenu = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
 const menuTarget = ref<FileNode | null>(null)
+// 菜单位置 clamp（估算宽高，防贴窗口右缘/下缘时溢出被裁剪）
+const menuStyle = computed(() => {
+  const p = clampFloatPos(menuX.value, menuY.value, 140, 150)
+  return { left: p.x + 'px', top: p.y + 'px' }
+})
 const loaded = ref(false)
 const dragOver = ref(false)  // 拖拽悬停高亮
 
@@ -140,6 +147,8 @@ async function doRename() {
   const target = menuTarget.value
   const newName = await promptDialog(t('prompt.newName'), target.name)
   if (!newName || newName === target.name) return
+  // 校验名称：拒绝路径分隔符与 ..（防移动到目录外）
+  if (!isValidNewName(newName)) { showToast(t('toast.invalidName'), 'error', 4000); return }
   const parent = currentPath.value.replace(/\/$/, '')
   try {
     await invoke('sftp_rename', { sessionId: props.sessionId, oldPath: target.path, newPath: parent + '/' + newName })
@@ -151,6 +160,8 @@ async function doNewFolder() {
   if (!props.sessionId) return; closeMenu()
   const name = await promptDialog(t('prompt.folderName'))
   if (!name) return
+  // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
+  if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
   const path = currentPath.value.replace(/\/$/, '') + '/' + name
   try {
     await invoke('sftp_create_dir', { sessionId: props.sessionId, path })
@@ -194,7 +205,7 @@ watch(() => props.locked, (locked) => {
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="error" class="error">{{ error }}</div>
       <div v-if="currentPath !== '/'" class="tree-node up-node" @click="goUp">
-        <span class="icon">📂</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
         <span class="name">..</span>
       </div>
       <div
@@ -208,13 +219,15 @@ watch(() => props.locked, (locked) => {
         @dragstart="onDragStart($event, f)"
         @contextmenu="onContextMenu($event, f)"
       >
-        <span class="icon">{{ f.is_dir ? '📁' : '📄' }}</span>
+        <!-- 文件夹/文件图标（SVG 无 emoji，项目约定） -->
+        <svg v-if="f.is_dir" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
+        <svg v-else class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
         <span class="name">{{ f.name }}</span>
-        <span v-if="!f.is_dir" class="size">{{ (f.size / 1024).toFixed(0) }}K</span>
+        <span v-if="!f.is_dir" class="size">{{ formatFileSize(f.size) }}</span>
       </div>
     </div>
 
-    <div v-if="showMenu" class="context-menu" :style="{ left: menuX + 'px', top: menuY + 'px' }">
+    <div v-if="showMenu" class="context-menu" :style="menuStyle">
       <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doDownload">{{ t('common.download') }}</div>
       <div class="menu-item" @click="doDelete">{{ t('common.delete') }}</div>
       <div class="menu-item" @click="doRename">{{ t('common.rename') }}</div>
@@ -241,9 +254,9 @@ watch(() => props.locked, (locked) => {
 .tree-node:hover { background: var(--color-background-mute); }
 .tree-node.selected { background: var(--color-border-hover); }
 .up-node { border-bottom: 1px solid var(--color-border); font-weight: 500; }
-.icon { flex-shrink: 0; }
+.icon { flex-shrink: 0; width: 14px; height: 14px; }
 .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.size { font-size: 0.7rem; opacity: 0.5; flex-shrink: 0; }
+.size { font-size: 0.7rem; opacity: 0.5; flex-shrink: 0; white-space: nowrap; }
 .loading { padding: 0.5rem; opacity: 0.5; text-align: center; }
 .error { padding: 0.5rem; color: #e5534b; font-size: 0.75rem; text-align: center; }
 .locked { pointer-events: none; opacity: 0.6; }
