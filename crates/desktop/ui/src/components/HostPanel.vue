@@ -38,6 +38,28 @@ const emit = defineEmits<{
 const selectedId = ref<string | null>(null)
 const menu = ref<{ x: number; y: number; host: Host } | null>(null)
 
+// 悬停信息卡：鼠标悬停主机项显示详情（参考 Tabby/WindTerm 等成熟客户端：名称/地址/用户名/认证/分组/备注）
+// 位置在悬停起始处固定（不随鼠标移动，避免抖动）；clamp 防溢出窗口边缘（主机栏在右，卡默认偏右下）
+const TIP_WIDTH = 200
+const TIP_HEIGHT = 150
+const tip = ref<{ x: number; y: number; host: Host } | null>(null)
+function showTip(e: MouseEvent, host: Host) {
+  tip.value = {
+    x: Math.max(8, Math.min(e.clientX + 12, window.innerWidth - TIP_WIDTH - 12)),
+    y: Math.max(8, Math.min(e.clientY + 12, window.innerHeight - TIP_HEIGHT - 12)),
+    host,
+  }
+}
+function hideTip() { tip.value = null }
+
+// 认证方式显示名（与主机表单下拉文案一致；未知类型保留原值）
+function authLabel(authType: string): string {
+  if (authType === 'password') return t('form.authPassword')
+  if (authType === 'private_key') return t('form.authPrivateKey')
+  if (authType === 'agent') return t('form.authAgent')
+  return authType
+}
+
 // 按分组组织主机列表：[分组名, 组内主机] 数组；空分组名归入"未分组"标题
 const groupedHosts = computed(() => {
   const groups = new Map<string, Host[]>()
@@ -51,6 +73,8 @@ const groupedHosts = computed(() => {
 
 function onContextMenu(e: MouseEvent, host: Host) {
   e.preventDefault()
+  // 右键打开菜单时关闭悬停信息卡，避免两浮层重叠
+  hideTip()
   menu.value = { x: e.clientX, y: e.clientY, host }
 }
 function closeMenu() { menu.value = null }
@@ -86,6 +110,8 @@ function onSearchInput(e: Event) {
             :class="{ active: selectedId === host.id }"
             @click="selectedId = host.id"
             @dblclick="emit('connect', host)"
+            @mouseenter="showTip($event, host)"
+            @mouseleave="hideTip"
             @contextmenu="onContextMenu($event, host)">
             <span class="host-name">{{ host.name }}</span>
             <span class="host-addr">{{ host.address }}:{{ host.port }}</span>
@@ -98,6 +124,19 @@ function onSearchInput(e: Event) {
       <div class="menu-item" @click="pick('edit')">{{ t('common.edit') }}</div>
       <div class="menu-item" @click="pick('ping')">{{ t('common.ping') }}</div>
       <div class="menu-item danger" @click="pick('delete')">{{ t('common.delete') }}</div>
+    </div>
+    <!-- 悬停信息卡：纯展示（pointer-events none 不拦截鼠标）；备注为空时省略该行 -->
+    <div v-if="tip" class="host-tip" :style="{ left: tip.x + 'px', top: tip.y + 'px' }">
+      <div class="tip-title">{{ tip.host.name }}</div>
+      <div class="tip-addr">{{ tip.host.address }}:{{ tip.host.port }}</div>
+      <div class="tip-grid">
+        <span class="tip-label">{{ t('detail.username') }}</span><span>{{ tip.host.username }}</span>
+        <span class="tip-label">{{ t('detail.auth') }}</span><span>{{ authLabel(tip.host.auth_type) }}</span>
+        <span class="tip-label">{{ t('detail.group') }}</span><span>{{ tip.host.group_name || t('hosts.groupUnassigned') }}</span>
+        <template v-if="tip.host.notes">
+          <span class="tip-label">{{ t('detail.notes') }}</span><span class="tip-notes">{{ tip.host.notes }}</span>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -127,6 +166,20 @@ function onSearchInput(e: Event) {
 .menu-item { padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
 .menu-item:hover { background: var(--color-background-mute); }
 .menu-item.danger { color: #e5534b; }
+
+/* 悬停信息卡：与 context-menu 同风格浮层；pointer-events none 保证不干扰鼠标悬停切换 */
+.host-tip {
+  position: fixed; width: 200px; padding: 0.6rem 0.7rem;
+  background: var(--color-background); border: 1px solid var(--color-border);
+  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000;
+  pointer-events: none; animation: tip-in 0.12s ease-out;
+}
+.tip-title { font-size: 0.85rem; font-weight: 600; color: var(--color-heading); margin-bottom: 0.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tip-addr { font-size: 0.72rem; color: var(--color-text); opacity: 0.7; font-family: Consolas, monospace; margin-bottom: 0.5rem; }
+.tip-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; font-size: 0.75rem; }
+.tip-label { color: var(--color-text); opacity: 0.55; white-space: nowrap; }
+.tip-notes { white-space: pre-wrap; word-break: break-all; }
+@keyframes tip-in { from { opacity: 0; } to { opacity: 1; } }
 
 .btn {
   padding: 0.3rem 0.7rem; border: 1px solid var(--color-border); border-radius: 4px;

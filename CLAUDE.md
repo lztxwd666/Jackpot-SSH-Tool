@@ -142,6 +142,7 @@ Vue 3 Composition API (`<script setup>`). `App.vue` hosts the tab workspace (wra
 - Crate names use hyphens in Cargo.toml (`core-common`), Rust code uses underscores (`core_common`)
 - `tracing` for logging; `thiserror` for error types; `serde` with tag-based JSON for events
 - Deps: `ssh2` 0.9, `rusqlite` 0.31 (bundled), `tokio` full, `tauri` 2
+- Git commit messages must NOT include a `Co-Authored-By` trailer (product decision, do not add Claude as a co-author)
 
 ## Fix Quality Bar
 
