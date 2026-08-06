@@ -27,7 +27,7 @@ function pct(t: TransferTask): number {
       <div class="t-bar">
         <div class="t-fill" :style="{ width: pct(tr) + '%' }"></div>
       </div>
-      <!-- 校验阶段提示在顶部状态条（绿色 verifying notice）；此处恢复纯百分比 -->
+      <!-- 校验阶段提示为顶部 toast（绿色"校验中..."）；进度条此处保持纯百分比 -->
       <span class="t-pct">{{ pct(tr) }}%</span>
       <span class="t-size">{{ formatFileSize(tr.done) }} / {{ formatFileSize(tr.total) }}</span>
     </div>

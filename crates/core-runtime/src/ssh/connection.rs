@@ -3,8 +3,8 @@
 //! 所有 SSH I/O 操作通过 emit_event 回调报告状态变化
 
 use core_common::{ConnectionConfig, CoreResult, KnownHostsProvider};
-use core_event::event::{ConnectionEvent, CoreEvent, HostKeyEvent};
 use core_event::EventDispatcher;
+use core_event::event::{ConnectionEvent, CoreEvent, HostKeyEvent};
 use ssh2::Session;
 use std::io::Read;
 use std::net::TcpStream;
@@ -197,8 +197,9 @@ impl SshConnection {
             .ok_or_else(|| core_common::CoreError::Internal("no active session".into()))?;
 
         // 打开 exec 通道（非阻塞模式下可能 EAGAIN）
-        let mut ch = super::retry::io_retry(|| session.channel_session(), cancel)
-            .map_err(|e| core_common::CoreError::Internal(format!("open exec channel failed: {e}")))?;
+        let mut ch = super::retry::io_retry(|| session.channel_session(), cancel).map_err(|e| {
+            core_common::CoreError::Internal(format!("open exec channel failed: {e}"))
+        })?;
 
         // 发送 exec 请求（非阻塞模式下可能 EAGAIN）
         super::retry::io_retry(|| ch.exec(command), cancel)
@@ -207,15 +208,21 @@ impl SshConnection {
         // 读取输出（非阻塞模式下可能 EAGAIN）
         // 累积原始字节，最后一次性解码：避免多字节 UTF-8 跨块边界被 from_utf8_lossy 损坏
         // 输出上限：exec 为公开方法，防御未来大输出场景撑爆内存（当前调用方哈希探测输出很小）
-        // 等待上限 60s：远程命令计算中无输出是正常状态（如 sha256sum 计算大文件数秒），
-        // 1s 默认上限会误判失败跳过校验；断开（cancel 置位）仍可随时中断
+        // 单次 read 等待上限 60s：远程命令计算中无输出是正常状态（如 sha256sum 计算大文件数秒），
+        // 1s 默认上限会误判失败跳过校验。注意两点（worker 单线程语义）：
+        // 1) exec 执行期间命令队列不被处理，断开/关闭命令在 exec 返回后生效；
+        //    cancel 预置位（如传输取消后排队的 exec）时各阶段立即失败
+        // 2) 上限按单次 read 结算（每块重新计 60s 预算），sha256sum 输出集中在结尾，
+        //    实际等待约等于命令计算时长，总等待无硬上限但取消可中断
         const EXEC_OUTPUT_CAP: usize = 1024 * 1024;
         const EXEC_READ_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
             let n = super::retry::io_retry_with_cap(|| ch.read(&mut buf), cancel, EXEC_READ_WAIT)
-                .map_err(|e| core_common::CoreError::Internal(format!("exec read failed: {e}")))?;
+                .map_err(|e| {
+                core_common::CoreError::Internal(format!("exec read failed: {e}"))
+            })?;
             if n == 0 {
                 break; // EOF
             }

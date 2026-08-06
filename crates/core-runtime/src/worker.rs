@@ -810,8 +810,9 @@ impl Worker {
             WorkerCommand::Close => {
                 if self.transferring {
                     // 传输进行中：置位取消标志立即中止传输（断开即断，传输循环在
-                    // 下一个 chunk 检查点返回取消错误，不完整文件由 desktop 侧清理）；
-                    // 连接释放延迟到传输栈弹出（flush_pending，防 use-after-free）
+                    // 下一个 chunk 检查点返回取消错误，不完整文件由
+                    // Channel::sftp_download_file 错误路径清理）；连接释放延迟到
+                    // 传输栈弹出（flush_pending，防 use-after-free）
                     self.cancel
                         .store(true, std::sync::atomic::Ordering::Relaxed);
                     self.pending_close = true;
@@ -993,7 +994,8 @@ where
     while written < data.len() {
         match io_retry(|| write(&data[written..]), cancel) {
             Ok(0) => {
-                // 零进度：写窗口满，短退避后重试；断开（cancel 置位）立即中止
+                // 零进度：写窗口满，短退避后重试；cancel 预置位（断开已生效）时中止
+                // （循环内不处理命令队列，断开命令在传输循环检查点生效后置位）
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(CoreError::Internal("write cancelled".into()));
                 }

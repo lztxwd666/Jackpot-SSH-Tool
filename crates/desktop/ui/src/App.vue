@@ -94,6 +94,12 @@ function closeTab(tabId: string) {
     if (tr.sessionId === tab.sessionId) {
       cancelledTransfers.add(tid)
       delete transfers.value[tid]
+      // 同步移除该传输的"校验中"toast（若已进入校验阶段）
+      const vt = verifyingToasts[tid]
+      if (vt !== undefined) {
+        removeToast(vt)
+        delete verifyingToasts[tid]
+      }
     }
   }
   if (tab.sessionId) {
@@ -285,7 +291,9 @@ async function connectFlow(host: Host, secret: string | null, cancel: FlowCancel
     openSessionTab(sid, host.id, host.name, host.address, cid)
   } catch (e) {
     // 取消或失败统一回收会话；已关闭的会话再次 terminal_close 幂等无害
-    abandonedSessions.add(sid)
+    // 仅取消路径登记放弃标记（防已广播的迟到 Connected 翻状态）；普通失败
+    // （认证/TCP 失败）不会广播 Connected，登记只会产生只增不删的内存残留
+    if (String(e).includes('connect-cancelled')) abandonedSessions.add(sid)
     await discardSession(sid)
     throw e
   }
@@ -769,8 +777,15 @@ onMounted(async () => {
       tr.total = event.payload.total
     }
     // 校验阶段：顶部弹出绿色"校验中..."常驻 toast（与"已下载到"等结果 toast 同位置，
-    // 校验完移除后结果 toast 接上，衔接直观）；同一传输重复事件幂等（已存在不重复弹）
-    if (event.payload.verifying && verifyingToasts[event.payload.id] === undefined) {
+    // 校验完移除后结果 toast 接上，衔接直观）；同一传输重复事件幂等（已存在不重复弹）；
+    // 守卫：传输已结束（进度条已移除）或已被取消时不弹——事件与命令回复经不同 IPC
+    // 通道，顺序无强保证，迟到事件不得产生无 remove 路径的常驻 toast
+    if (
+      event.payload.verifying
+      && transfers.value[event.payload.id]
+      && !cancelledTransfers.has(event.payload.id)
+      && verifyingToasts[event.payload.id] === undefined
+    ) {
       verifyingToasts[event.payload.id] = showToast(t('transfer.verifying'), 'verifying', 0)
     }
   })
