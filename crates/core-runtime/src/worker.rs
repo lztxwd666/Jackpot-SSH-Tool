@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tokio::sync::oneshot;
 
 /// worker 空闲工作间隔（毫秒）：shell 读轮询与命令响应延迟的上限
@@ -661,8 +661,9 @@ impl Worker {
                 // 取消（断开/Close）：显式错误走统一失败清理，避免 total==0 时误报成功
                 return Err(CoreError::Internal("transfer cancelled".into()));
             }
-            // 读块：专用手动循环（EAGAIN 退避期间嵌套处理命令，终端输入不积压）
-            let n = self.transfer_read_chunk(&mut file, &mut chunk)?;
+            // 读块（EAGAIN 退避统一走 io_retry：libssh2 通道顺序约束，退避期间不得处理其他通道）
+            let n = io_retry(|| file.read(&mut chunk), &self.cancel)
+                .map_err(|e| CoreError::Internal(format!("sftp read failed: {e}")))?;
             if n == 0 {
                 break;
             }
@@ -681,45 +682,12 @@ impl Worker {
         Ok(done)
     }
 
-    /// 传输循环 EAGAIN 退避的公共语义（单一实现，读/写循环共用）：
-    /// 退避期间嵌套处理命令（关键：大文件传输时远端发送节奏慢，read/write 频繁 EAGAIN，
-    /// 若退避期间不处理命令，终端输入会积压到传输结束才一次性执行），
-    /// 并检查取消标志与 1s 累计上限（与 io_retry 语义一致）。
-    /// 返回 Ok(true) 表示应继续重试；Ok(false) 表示已达上限（调用方返回当前错误）；
-    /// Err 表示已取消（传输终止）。
-    fn eagain_backoff(&mut self, start: Instant, delay: &mut u64) -> CoreResult<bool> {
-        self.drain_nested_commands();
-        if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(CoreError::Internal("transfer cancelled".into()));
-        }
-        if start.elapsed() >= Duration::from_millis(1000) {
-            return Ok(false);
-        }
-        std::thread::sleep(Duration::from_millis(*delay));
-        *delay = (*delay * 2).min(32);
-        Ok(true)
-    }
-
-    /// 传输循环专用读块：EAGAIN 时走 eagain_backoff（退避期间处理命令，输入不积压）
-    fn transfer_read_chunk(
-        &mut self,
-        file: &mut ssh2::File,
-        chunk: &mut [u8; SFTP_CHUNK_SIZE],
-    ) -> CoreResult<usize> {
-        let start = Instant::now();
-        let mut delay = 2u64;
-        loop {
-            match file.read(chunk) {
-                Ok(n) => return Ok(n),
-                Err(e) if crate::ssh::is_would_block(&e) => {
-                    if !self.eagain_backoff(start, &mut delay)? {
-                        return Err(CoreError::Internal(format!("sftp read failed: {e}")));
-                    }
-                }
-                Err(e) => return Err(CoreError::Internal(format!("sftp read failed: {e}"))),
-            }
-        }
-    }
+    // 注意（libssh2 通道顺序约束）：非阻塞模式下，一个通道的操作未完成（EAGAIN）时
+    // 不得操作其他通道（"operations on one channel should complete before operations on
+    // another begin"）——EAGAIN 退避期间若处理命令队列（如终端输入写 shell 通道），
+    // 会破坏 libssh2 内部状态机导致连接错误（实测 SOCKET_SEND 失败断连）。
+    // 因此传输的读/写统一走 io_retry（哑退避），命令队列只在 chunk 边界（无未完成操作）处理。
+    // 传输期间终端输入的网络发送可能因带宽竞争排队（SSH 传输特性），属正常现象。
 
     /// 上传循环：每 chunk 后嵌套处理队列（断开/输入等立即响应）
     fn transfer_upload_inner(
@@ -755,11 +723,15 @@ impl Worker {
                 if n == 0 {
                     break;
                 }
-                // 写入完整块（处理 EAGAIN 与部分写入；专用手动循环，退避期间嵌套处理命令）
+                // 写入完整块（处理 EAGAIN 与部分写入；统一走 io_retry，退避期间不得处理其他通道）
                 let mut off = 0;
                 while off < n {
-                    let w = self.transfer_write_chunk(&mut file, &chunk[off..n])?;
-                    off += w;
+                    match io_retry(|| file.write(&chunk[off..n]), &self.cancel) {
+                        Ok(w) => off += w,
+                        Err(e) => {
+                            return Err(CoreError::Internal(format!("sftp write failed: {e}")));
+                        }
+                    }
                 }
                 done += n as u64;
                 let _ = progress.send((done, total));
@@ -786,24 +758,6 @@ impl Worker {
             tracing::warn!(%remote_path, %local_path, "upload failed, partial remote file removed");
         }
         result
-    }
-
-    /// 传输循环专用写块：EAGAIN 时走 eagain_backoff（与 transfer_read_chunk 共用同一退避语义）
-    /// 处理部分写入（返回已写字节数）
-    fn transfer_write_chunk(&mut self, file: &mut ssh2::File, data: &[u8]) -> CoreResult<usize> {
-        let start = Instant::now();
-        let mut delay = 2u64;
-        loop {
-            match file.write(data) {
-                Ok(w) => return Ok(w),
-                Err(e) if crate::ssh::is_would_block(&e) => {
-                    if !self.eagain_backoff(start, &mut delay)? {
-                        return Err(CoreError::Internal(format!("sftp write failed: {e}")));
-                    }
-                }
-                Err(e) => return Err(CoreError::Internal(format!("sftp write failed: {e}"))),
-            }
-        }
     }
 
     /// 处理队列中所有已到达命令；返回 false 表示应结束线程
