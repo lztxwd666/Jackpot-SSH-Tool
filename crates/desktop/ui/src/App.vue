@@ -88,6 +88,14 @@ function closeTab(tabId: string) {
   if (!tab) return
   // 取消标记：进行中的重连流程在各检查点中止（迟到成功不得操作已关闭标签、不得新建通道）
   tab.cancelled = true
+  // 取消该会话进行中的传输：进度条立即移除（后端 Close 命令同时中止 worker 传输），
+  // 迟到结果静默——断开即取消，传输不得在会话关闭后继续跑
+  for (const [tid, tr] of Object.entries(transfers.value)) {
+    if (tr.sessionId === tab.sessionId) {
+      cancelledTransfers.add(tid)
+      delete transfers.value[tid]
+    }
+  }
   if (tab.sessionId) {
     invoke('terminal_close', { sessionId: tab.sessionId }).catch(() => {})
   }
@@ -212,10 +220,10 @@ async function connectHost(host: Host) {
   await doConnectWith(host, secret)
 }
 
-// 连接操作总超时（毫秒）：TCP 连接超时 30s + 认证/开通道余量。
+// 连接操作总超时（毫秒）：TCP 连接超时 15s + 认证/开通道余量。
 // 防御性：即使后端挂起（worker 卡死/网络黑洞），前端 UI 不死锁——
 // connecting 卡 true 会吞掉所有后续连接操作（用户实测"断开后无法连接"现象）
-const CONNECT_TIMEOUT_MS = 45_000
+const CONNECT_TIMEOUT_MS = 30_000
 
 // 连接/重连流程取消令牌：超时（onTimeout 置位）或标签关闭（tab.cancelled）时置位，
 // 流程各 await 检查点中止，杜绝迟到成功产生的幽灵标签/状态回翻
@@ -542,11 +550,15 @@ const homeDir = ref('')
 // 传输任务进度（流式传输事件更新，全局进度面板）
 interface TransferTask {
   id: string
+  sessionId: string // 归属会话：关闭标签时据此取消该会话进行中的传输
   name: string
   direction: 'download' | 'upload'
   done: number
   total: number
 }
+
+// 已取消的传输（taskId）：closeTab 关闭会话时置位，迟到结果静默（不弹失败 toast、不刷新树）
+const cancelledTransfers = new Set<string>()
 // 与后端 commands/sftp.rs 的 TransferProgress 结构对应
 interface TransferProgress {
   id: string
@@ -590,18 +602,26 @@ async function downloadFile(sessionId: string, remotePath: string, localDir?: st
 
   // 创建传输任务（进度面板显示）
   const taskId = crypto.randomUUID()
-  transfers.value[taskId] = { id: taskId, name: fileName, direction: 'download', done: 0, total: 0 }
+  transfers.value[taskId] = { id: taskId, sessionId, name: fileName, direction: 'download', done: 0, total: 0 }
   try {
     await invoke('sftp_download_file', {
       sessionId, remotePath, localPath, taskId, expectedDir: dir,
     })
+    if (cancelledTransfers.has(taskId)) return // 会话已关闭：迟到结果静默
     // 刷新对应标签的本地文件树
     bumpLocalRefresh(sessionId)
     showToast(t('toast.downloaded', { path: localPath }), 'success', 5000)
   } catch (e) {
+    // 会话关闭导致的取消：静默（进度条已在 closeTab 移除）
+    if (cancelledTransfers.has(taskId)) return
     showToast(t('toast.downloadFailed', { err: String(e) }), 'error', 5000)
   } finally {
     downloading.value[remotePath] = false
+    if (cancelledTransfers.has(taskId)) {
+      cancelledTransfers.delete(taskId)
+      delete transfers.value[taskId]
+      return
+    }
     // 完成后短暂保留进度条（显示 100%），随后移除
     setTimeout(() => { delete transfers.value[taskId] }, 1500)
   }
@@ -620,19 +640,27 @@ async function uploadFile(sessionId: string, remoteDir: string, localPath: strin
 
   // 创建传输任务
   const taskId = crypto.randomUUID()
-  transfers.value[taskId] = { id: taskId, name: fileName, direction: 'upload', done: 0, total: 0 }
+  transfers.value[taskId] = { id: taskId, sessionId, name: fileName, direction: 'upload', done: 0, total: 0 }
   try {
     await invoke('sftp_upload_file', {
       sessionId, remotePath, localPath, taskId,
       expectedDir: expectedDir || homeDir.value || '',
     })
+    if (cancelledTransfers.has(taskId)) return // 会话已关闭：迟到结果静默
     // 刷新对应标签的远程文件树
     bumpRemoteRefresh(sessionId)
     showToast(t('toast.uploaded', { path: remotePath }), 'success', 5000)
   } catch (e) {
+    // 会话关闭导致的取消：静默
+    if (cancelledTransfers.has(taskId)) return
     showToast(t('toast.uploadFailed', { err: String(e) }), 'error', 5000)
   } finally {
     uploading.value[localPath] = false
+    if (cancelledTransfers.has(taskId)) {
+      cancelledTransfers.delete(taskId)
+      delete transfers.value[taskId]
+      return
+    }
     setTimeout(() => { delete transfers.value[taskId] }, 1500)
   }
 }

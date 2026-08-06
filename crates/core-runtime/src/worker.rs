@@ -809,8 +809,11 @@ impl Worker {
             }
             WorkerCommand::Close => {
                 if self.transferring {
-                    // 传输进行中：断开延迟（disconnect_inner 内部处理），关闭状态与线程
-                    // 退出由 flush_pending 在传输栈弹出后统一完成（保持事件顺序）
+                    // 传输进行中：置位取消标志立即中止传输（断开即断，传输循环在
+                    // 下一个 chunk 检查点返回取消错误，不完整文件由 desktop 侧清理）；
+                    // 连接释放延迟到传输栈弹出（flush_pending，防 use-after-free）
+                    self.cancel
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     self.pending_close = true;
                 } else {
                     self.disconnect_inner("session closed");

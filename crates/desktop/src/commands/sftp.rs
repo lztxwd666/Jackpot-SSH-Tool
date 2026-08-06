@@ -155,10 +155,13 @@ pub async fn sftp_download_file(
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
-    let session = rt_ref
-        .get_session(&sid_verify)
-        .await
-        .ok_or("session not found")?;
+    let Some(session) = rt_ref.get_session(&sid_verify).await else {
+        // 会话已在传输完成前被关闭（用户关闭标签/断开）：文件已完整传输，
+        // 断开后校验无意义，跳过并成功返回（不报误导性的 session not found）
+        tracing::warn!(session_id = %sid_verify, "session closed before checksum, verification skipped");
+        return Ok(done);
+    };
+    drop(rt);
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {
@@ -237,10 +240,12 @@ pub async fn sftp_upload_file(
     let rt = state.runtime.read().await;
     let rt_ref = rt.as_ref().ok_or("runtime not initialized")?;
     let sid_verify = SessionId::parse(&session_id)?;
-    let session = rt_ref
-        .get_session(&sid_verify)
-        .await
-        .ok_or("session not found")?;
+    let Some(session) = rt_ref.get_session(&sid_verify).await else {
+        // 会话已在传输完成前被关闭：上传已完成，跳过校验并成功返回
+        tracing::warn!(session_id = %sid_verify, "session closed before checksum, verification skipped");
+        return Ok(done);
+    };
+    drop(rt);
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {

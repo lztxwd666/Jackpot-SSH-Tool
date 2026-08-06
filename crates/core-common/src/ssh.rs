@@ -15,14 +15,14 @@ pub struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    /// 创建一个新的连接配置，默认端口 22、超时 30 秒
+    /// 创建一个新的连接配置，默认端口 22、超时 15 秒（TCP 不可达快速失败，用户反馈等待过长）
     pub fn new(host: String, username: String, auth_method: AuthMethod) -> Self {
         Self {
             host,
             port: 22,
             username,
             auth_method,
-            timeout_secs: 30,
+            timeout_secs: 15,
         }
     }
 

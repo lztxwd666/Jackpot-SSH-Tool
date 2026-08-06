@@ -5,6 +5,7 @@ mod commands;
 
 use commands::AppState;
 use core_common::DefaultConfig;
+use core_event::event::{ChannelEvent, CoreEvent};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -46,6 +47,11 @@ pub fn run() {
                 loop {
                     match event_rx.recv().await {
                         Ok(event) => {
+                            // 通道关闭事件（shell EOF 远端关闭/断开清理）：同步移除 desktop 层
+                            // 通道注册表条目，terminal_send_input 等命令不再对已关闭通道报错刷日志
+                            if let CoreEvent::Channel(ChannelEvent::Closed { channel_id, .. }) = &event {
+                                state.channels.write().await.remove(channel_id);
+                            }
                             if let Err(e) = app_handle.emit("core-event", &event) {
                                 tracing::error!(%e, "failed to emit core-event");
                             }

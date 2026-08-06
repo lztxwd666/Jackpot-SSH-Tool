@@ -22,7 +22,8 @@ function pct(t: TransferTask): number {
 <template>
   <div v-if="Object.keys(transfers).length > 0" class="transfer-panel">
     <div v-for="tr in Object.values(transfers)" :key="tr.id" class="transfer-item">
-      <span class="t-name">{{ tr.direction === 'download' ? '↓' : '↑' }} {{ tr.name }}</span>
+      <!-- 超长文件名省略号截断（保持进度条宽度），悬停 title 显示全名 -->
+      <span class="t-name" :title="tr.name">{{ tr.direction === 'download' ? '↓' : '↑' }} {{ tr.name }}</span>
       <div class="t-bar">
         <div class="t-fill" :style="{ width: pct(tr) + '%' }"></div>
       </div>

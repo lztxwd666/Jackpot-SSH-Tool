@@ -16,6 +16,9 @@ let resizeTimer: number | undefined
 // 卸载标记：await listen 期间组件可能被卸载（重连 :key 重建），
 // 返回后检查标记解绑监听器并中止初始化，防监听器泄漏与对已 dispose 终端的写入
 let disposed = false
+// 会话结束标记：shell EOF 远端关闭通道（Closed 事件）后停止发送输入并显示提示
+// （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
+let ended = false
 
 onMounted(async () => {
   term = new Terminal({
@@ -66,6 +69,12 @@ onMounted(async () => {
           for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
           term.write(bytes)
         }
+      } else if (parsed.type === 'Channel' && parsed.payload.kind === 'Closed') {
+        // 本通道已关闭（远端 exit 触发 EOF）：停止输入并显示提示（终端内文本，非 UI 字符串）
+        if (parsed.payload.detail.channel_id === props.channelId && !ended) {
+          ended = true
+          term.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n')
+        }
       }
     } catch (_) {}
   })
@@ -78,6 +87,8 @@ onMounted(async () => {
   }
 
   term.onData((data) => {
+    // 会话已结束（exit 后通道关闭）：丢弃输入，不再发 IPC
+    if (ended) return
     invoke('terminal_send_input', { channelId: props.channelId, data }).catch(() => {})
   })
 
