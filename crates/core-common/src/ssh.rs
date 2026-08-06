@@ -107,15 +107,6 @@ pub enum ChannelType {
     Sftp,
 }
 
-/// 通道生命周期状态
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ChannelState {
-    Opening,
-    Open,
-    Closing,
-    Closed,
-}
-
 /// PTY 终端窗口尺寸
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PtySize {

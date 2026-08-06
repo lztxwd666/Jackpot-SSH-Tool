@@ -55,14 +55,21 @@ pub enum ConnectionEvent {
 
 /// HostKey 验证事件
 /// 用于通知前端出现未知主机或主机密钥变更的情况
+/// key_type（ssh-rsa/ssh-ed25519 等）必须透传：V4 起 known_hosts 按 (host, port, key_type)
+/// 匹配，approve 时需按真实类型存储，否则确认过的密钥永远无法命中
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail")]
 pub enum HostKeyEvent {
     /// 发现未知主机，需要用户确认
-    Unknown { host: String, fingerprint: String },
+    Unknown {
+        host: String,
+        key_type: String,
+        fingerprint: String,
+    },
     /// 主机密钥已变更，可能存在中间人攻击
     Changed {
         host: String,
+        key_type: String,
         old_fingerprint: String,
         new_fingerprint: String,
     },

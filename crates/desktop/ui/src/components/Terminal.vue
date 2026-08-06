@@ -39,9 +39,9 @@ onMounted(async () => {
     }, 150)
   })
 
-  // 容器隐藏（后台标签 v-show 挂载）时跳过初始 fit：fit 会把 PTY resize 成 1x1，
-  // 显示后由 ResizeObserver（尺寸 0 变为实际值）触发正确 fit
-  if (terminalRef.value!.offsetWidth > 0) {
+  // 容器隐藏（后台标签 v-show 挂载）或布局未稳定（高度 0）时跳过初始 fit：
+  // fit 会把 PTY resize 成 1x1/0 行，显示后由 ResizeObserver（尺寸 0 变为实际值）触发正确 fit
+  if (terminalRef.value!.offsetWidth > 0 && terminalRef.value!.offsetHeight > 0) {
     fitAddon.fit()
     term.focus()
 

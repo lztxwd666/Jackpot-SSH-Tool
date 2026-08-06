@@ -47,18 +47,20 @@ pub async fn delete_host(state: State<'_, Arc<AppState>>, id: String) -> Result<
 
 /// 用户确认（或更新）主机密钥后存储，供后续连接验证
 /// 存储使用 INSERT OR REPLACE，天然支持"信任新密钥"（覆盖旧值）场景
+/// key_type 由前端从 HostKey 事件透传：known_hosts 按 (host, port, key_type) 匹配，
+/// 必须按真实类型（ssh-rsa/ssh-ed25519 等）存储，否则确认过的密钥永远无法命中
 #[tauri::command]
 pub async fn approve_host_key(
     state: State<'_, Arc<AppState>>,
     host: String,
     port: u16,
+    key_type: String,
     fingerprint: String,
 ) -> Result<(), String> {
     let guard = state.runtime.read().await;
     let rt = guard.as_ref().ok_or("runtime not initialized")?;
     let kh = rt.known_hosts().await.ok_or("known hosts provider not available")?;
-    // key_type 不影响指纹比对逻辑，统一记录为 user-approved
-    let info = core_common::HostKeyInfo::new(host, port, "user-approved".to_string(), fingerprint);
+    let info = core_common::HostKeyInfo::new(host, port, key_type, fingerprint);
     kh.store_host_key(&info).map_err(|e| e.to_string())
 }
 

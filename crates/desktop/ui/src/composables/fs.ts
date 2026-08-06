@@ -9,10 +9,11 @@ export function formatFileSize(n: number): string {
 }
 
 /**
- * 新建/重命名名称校验：拒绝空名、路径分隔符与 ..（自伤型路径穿越防护，
- * 输入 ..\..\x 会把目标建到/移动到当前目录之外）
+ * 新建/重命名名称校验：拒绝空名、路径分隔符与精确 ..（自伤型路径穿越防护，
+ * 输入 ..\..\x 会把目标建到/移动到当前目录之外；分隔符被拒后单独的 .. 段
+ * 不可能出现，因此 a..b 这类含 .. 子串的合法文件名不受影响）
  */
 export function isValidNewName(name: string): boolean {
   if (!name || name === '.' || name === '..') return false
-  return !/[/\\]/.test(name) && !name.includes('..')
+  return !/[/\\]/.test(name)
 }

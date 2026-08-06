@@ -482,6 +482,8 @@ async function reconnectFlow(host: Host, secret: string | null, tab: SessionTabS
 // 手动重连场景（pendingConnectHost.reconnectTabId）：确认后继续重连流程（更新现有标签），拒绝则恢复断连状态
 async function handleHostKey(kind: string, detail: any) {
   const host = detail?.host
+  // key_type 随事件透传：approve 时按真实类型存储（known_hosts 按 (host, port, key_type) 匹配）
+  const keyType = detail?.key_type ?? ''
   const fingerprint = kind === 'Changed' ? detail?.new_fingerprint : detail?.fingerprint
   const oldFp = detail?.old_fingerprint
   if (!host || !fingerprint || !pendingConnectHost.value) return
@@ -504,7 +506,7 @@ async function handleHostKey(kind: string, detail: any) {
     return
   }
   try {
-    await invoke('approve_host_key', { host, port: pc.host.port, fingerprint })
+    await invoke('approve_host_key', { host, port: pc.host.port, keyType, fingerprint })
     // 批准后自动重连：重连场景继续 doReconnectWith（更新现有标签），首次连接走 doConnectWith
     // 待保存凭据仅保留在此路径：批准成功后的重试中认证通过才会消费
     pendingConnectHost.value = null

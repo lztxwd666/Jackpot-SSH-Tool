@@ -108,10 +108,11 @@ impl SshConnection {
             )? {
                 None => {
                     // 未知主机密钥：发出事件并中止连接（TOFU 流程）
-                    // 用户确认后通过 approve_host_key 存储密钥，然后重新连接
+                    // 用户确认后通过 approve_host_key 按真实 key_type 存储密钥，然后重新连接
                     self.dispatcher
                         .dispatch(CoreEvent::HostKey(HostKeyEvent::Unknown {
                             host: self.config.host.clone(),
+                            key_type: host_key_info.key_type.clone(),
                             fingerprint: host_key_info.fingerprint.clone(),
                         }));
                     return Err(core_common::CoreError::HostKeyUnknown {
@@ -127,6 +128,7 @@ impl SshConnection {
                         self.dispatcher
                             .dispatch(CoreEvent::HostKey(HostKeyEvent::Changed {
                                 host: self.config.host.clone(),
+                                key_type: host_key_info.key_type.clone(),
                                 old_fingerprint: stored.fingerprint.clone(),
                                 new_fingerprint: host_key_info.fingerprint.clone(),
                             }));
