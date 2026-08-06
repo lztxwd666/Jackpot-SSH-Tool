@@ -9,11 +9,15 @@ use tauri::{Emitter, State};
 
 /// 传输进度事件 payload（前端通过 "transfer-progress" 事件接收）
 /// 类型化定义：扩展字段时前后端同步修改，避免手拼 JSON 的字符串约定
+/// verifying：传输完成进入校验阶段（大文件 SHA-256 校验可能耗时数秒，
+/// 前端据此显示"校验中"提示，避免用户误以为传输未成功）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TransferProgress {
     pub id: String,
     pub done: u64,
     pub total: u64,
+    #[serde(default)]
+    pub verifying: bool,
 }
 
 /// 列出远程目录内容
@@ -141,6 +145,7 @@ pub async fn sftp_download_file(
                         id: tid.clone(),
                         done,
                         total,
+                        verifying: false,
                     },
                 );
             }
@@ -162,6 +167,17 @@ pub async fn sftp_download_file(
         return Ok(done);
     };
     drop(rt);
+    // 传输完成进入校验：推送 verifying 状态（大文件校验耗时数秒，前端显示"校验中"提示，
+    // 期间文件树未刷新（待校验通过），用户不会误以为传输失败）
+    let _ = app.emit(
+        "transfer-progress",
+        TransferProgress {
+            id: task_id.clone(),
+            done,
+            total: done,
+            verifying: true,
+        },
+    );
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {
@@ -226,6 +242,7 @@ pub async fn sftp_upload_file(
                         id: tid.clone(),
                         done,
                         total,
+                        verifying: false,
                     },
                 );
             }
@@ -246,6 +263,16 @@ pub async fn sftp_upload_file(
         return Ok(done);
     };
     drop(rt);
+    // 传输完成进入校验：推送 verifying 状态（同下载侧注释）
+    let _ = app.emit(
+        "transfer-progress",
+        TransferProgress {
+            id: task_id.clone(),
+            done,
+            total: done,
+            verifying: true,
+        },
+    );
     let rp2 = rp.clone();
     let lp2 = lp.clone();
     let (remote_hash, local_hash) = tokio::task::spawn_blocking(move || {

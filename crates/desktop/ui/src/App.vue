@@ -555,6 +555,7 @@ interface TransferTask {
   direction: 'download' | 'upload'
   done: number
   total: number
+  verifying?: boolean // 传输完成进入校验阶段（进度条显示"校验中"提示）
 }
 
 // 已取消的传输（taskId）：closeTab 关闭会话时置位，迟到结果静默（不弹失败 toast、不刷新树）
@@ -564,6 +565,7 @@ interface TransferProgress {
   id: string
   done: number
   total: number
+  verifying?: boolean
 }
 const transfers = ref<Record<string, TransferTask>>({})
 const downloading = ref<Record<string, boolean>>({})  // 下载防重入守卫
@@ -750,6 +752,7 @@ onMounted(async () => {
     if (tr) {
       tr.done = event.payload.done
       tr.total = event.payload.total
+      tr.verifying = event.payload.verifying ?? false
     }
   })
 })

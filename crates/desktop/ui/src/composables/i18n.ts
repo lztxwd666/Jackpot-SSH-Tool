@@ -123,6 +123,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.overlayDisconnected': 'Connection lost',
     // 传输期间终端提示：说明命令会延后但不会丢失，避免用户误以为卡住
     'tab.transferBusy': 'Transferring files, terminal commands will be delayed',
+    'transfer.verifying': 'Verifying...',
 
     // 状态栏
     'status.running': 'Running',
@@ -249,6 +250,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.overlayDisconnected': '连接已断开',
     // 传输期间终端提示：说明命令会延后但不会丢失，避免用户误以为卡住
     'tab.transferBusy': '正在传输文件，终端命令将延后执行',
+    'transfer.verifying': '校验中...',
 
     // 状态栏
     'status.running': '运行中',

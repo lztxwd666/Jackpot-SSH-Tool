@@ -2,6 +2,7 @@
 // 传输进度面板：展示所有进行中的下载/上传任务及实时进度
 
 import { formatFileSize } from '../composables/fs'
+import { t } from '../composables/i18n'
 
 export interface TransferTask {
   id: string
@@ -9,6 +10,7 @@ export interface TransferTask {
   direction: 'download' | 'upload'
   done: number
   total: number
+  verifying?: boolean // 传输完成进入校验阶段（进度条显示"校验中"提示）
 }
 
 defineProps<{ transfers: Record<string, TransferTask> }>()
@@ -27,7 +29,8 @@ function pct(t: TransferTask): number {
       <div class="t-bar">
         <div class="t-fill" :style="{ width: pct(tr) + '%' }"></div>
       </div>
-      <span class="t-pct">{{ pct(tr) }}%</span>
+      <!-- 校验阶段：显示"校验中"提示（大文件 SHA-256 校验耗时数秒，非卡住） -->
+      <span class="t-pct">{{ tr.verifying ? t('transfer.verifying') : pct(tr) + '%' }}</span>
       <span class="t-size">{{ formatFileSize(tr.done) }} / {{ formatFileSize(tr.total) }}</span>
     </div>
   </div>
