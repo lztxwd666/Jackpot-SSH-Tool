@@ -14,9 +14,25 @@ const RETRY_CAP: Duration = Duration::from_millis(1000);
 /// 错误判定用 is_would_block（错误码匹配 + source 链查找，兜底字符串匹配），
 /// 兼容 ssh2::Error 与包装它的 io::Error（io::Read/io::Write trait 返回 io::Error）
 /// 仅在 worker 线程内调用（sleep 重试不阻塞其他逻辑）
+/// 默认累计上限 1s（RETRY_CAP）；需长等待的场景（如 exec 等待远程命令输出）用
+/// io_retry_with_cap 指定更大上限
 pub(crate) fn io_retry<T, E>(
+    op: impl FnMut() -> Result<T, E>,
+    cancel: &AtomicBool,
+) -> Result<T, E>
+where
+    E: std::error::Error + 'static,
+{
+    io_retry_with_cap(op, cancel, RETRY_CAP)
+}
+
+/// 带自定义累计等待上限的 io_retry（唯一实现，io_retry 委托本函数，非复制逻辑）
+/// 适用场景：exec 等待远程命令输出——命令计算中 EAGAIN 是正常状态（如 sha256sum
+/// 计算大文件数秒无输出），1s 上限会误判失败跳过校验；取消标志仍可随时中断
+pub(crate) fn io_retry_with_cap<T, E>(
     mut op: impl FnMut() -> Result<T, E>,
     cancel: &AtomicBool,
+    cap: Duration,
 ) -> Result<T, E>
 where
     E: std::error::Error + 'static,
@@ -29,7 +45,7 @@ where
             Err(e) => {
                 if crate::ssh::is_would_block(&e)
                     && !cancel.load(std::sync::atomic::Ordering::Relaxed)
-                    && start.elapsed() < RETRY_CAP
+                    && start.elapsed() < cap
                 {
                     std::thread::sleep(Duration::from_millis(delay));
                     delay = (delay * 2).min(32);
@@ -83,6 +99,28 @@ mod tests {
         );
         assert!(r.is_err());
         assert_eq!(calls, 1, "cancel 置位时不得重试");
+    }
+
+    #[test]
+    fn test_io_retry_with_cap_long_wait() {
+        // 长等待上限：EAGAIN 持续超过默认 1s 上限（约 1.2s 退避）仍能成功，
+        // 模拟 exec 等待远程命令计算输出的场景（1s 默认上限会误判失败）
+        let cancel = AtomicBool::new(false);
+        let mut calls = 0;
+        let r = io_retry_with_cap(
+            || {
+                calls += 1;
+                if calls < 40 {
+                    Err(Error::new(ErrorCode::Session(-37), "Would block"))
+                } else {
+                    Ok(42u64)
+                }
+            },
+            &cancel,
+            Duration::from_secs(60),
+        );
+        assert!(r.is_ok());
+        assert!(calls >= 40, "应容忍长 EAGAIN 等待，实际重试 {calls} 次");
     }
 
     #[test]

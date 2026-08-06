@@ -207,11 +207,14 @@ impl SshConnection {
         // 读取输出（非阻塞模式下可能 EAGAIN）
         // 累积原始字节，最后一次性解码：避免多字节 UTF-8 跨块边界被 from_utf8_lossy 损坏
         // 输出上限：exec 为公开方法，防御未来大输出场景撑爆内存（当前调用方哈希探测输出很小）
+        // 等待上限 60s：远程命令计算中无输出是正常状态（如 sha256sum 计算大文件数秒），
+        // 1s 默认上限会误判失败跳过校验；断开（cancel 置位）仍可随时中断
         const EXEC_OUTPUT_CAP: usize = 1024 * 1024;
+        const EXEC_READ_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
         loop {
-            let n = super::retry::io_retry(|| ch.read(&mut buf), cancel)
+            let n = super::retry::io_retry_with_cap(|| ch.read(&mut buf), cancel, EXEC_READ_WAIT)
                 .map_err(|e| core_common::CoreError::Internal(format!("exec read failed: {e}")))?;
             if n == 0 {
                 break; // EOF
