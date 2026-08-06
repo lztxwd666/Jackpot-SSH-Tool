@@ -12,6 +12,8 @@ export interface SessionTabState {
   // 按 hostId 关联主机（name 非唯一且可重命名，hostId 才是稳定标识；Task 9 由 hostName 匹配迁移而来）
   hostId: string
   hostName: string
+  // 主机地址（建标签时快照，终端头部展示用；主机改名/改址后标签保留旧值，与 hostName 语义一致）
+  address: string
   sessionId: string
   channelId: string
   status: 'connecting' | 'connected' | 'disconnected' | 'reconnecting'
@@ -24,11 +26,11 @@ export interface SessionTabState {
 
 // 状态条提示（terminal 顶部）：统一模型，事件分派器按 id 增删
 // 新提示只需在分派器加一条事件映射（如未来"端口转发中"），无需改渲染
+// 操作按钮不放在提示里（用户反馈：重连按钮集中在断连遮罩中央，状态条仅提示状态）
 export interface TabNotice {
   id: string            // 稳定标识（upsert/remove 用，如 'transfer-busy'）
   level: 'info' | 'warning' | 'error'
   message: string       // 已翻译文案（t() 生成）
-  action?: 'reconnect'  // 可选操作按钮（现仅手动重连）
 }
 
 const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remoteRefreshKey: number; locked?: boolean }>()
@@ -75,16 +77,22 @@ function uploadFromLocal(localPath: string) {
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
     <div class="terminal-wrapper">
-      <!-- 终端头部：仅主机名；断连/重连按钮已移除（用户反馈：遮罩中央的重连按钮方案更协调，
-           断开操作走标签栏 × 关闭） -->
+      <!-- 终端头部：主机名 + IP 地址（用户反馈：仅主机名过于单调，添加地址更直观）；
+           断连/重连按钮不在此处（用户反馈：遮罩中央的重连按钮方案更协调，断开操作走标签栏 × 关闭） -->
       <div class="terminal-header">
-        <span class="connection-info">{{ tab.hostName }}</span>
+        <span class="connection-info">
+          <span class="connection-host">{{ tab.hostName }}</span>
+          <span class="connection-address">{{ tab.address }}</span>
+        </span>
       </div>
-      <!-- 状态条：notices 统一渲染（可多条堆叠；断连遮罩的重连按钮与此并行） -->
+      <!-- 状态条：notices 统一渲染（可多条堆叠；操作按钮集中断连遮罩，状态条仅提示） -->
       <div v-if="tab.notices.length" class="notice-stack">
         <div v-for="n in tab.notices" :key="n.id" class="status-banner" :class="n.level">
+          <!-- 级别图标（SVG 无 emoji）：info/warning/error 共用感叹号圆标，颜色随 level 着色 -->
+          <svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" />
+          </svg>
           <span class="notice-message">{{ n.message }}</span>
-          <button v-if="n.action === 'reconnect'" class="btn btn-primary notice-action" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
         </div>
       </div>
       <div class="terminal-body">
@@ -104,15 +112,20 @@ function uploadFromLocal(localPath: string) {
 /* 终端与远程文件树之间的分隔线（线条对齐：各区域分隔统一 1px var(--color-border)） */
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
-.connection-info { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; }
-/* 状态条（notices）：按 level 着色；多条堆叠（notice-stack） */
+.connection-info { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
+.connection-host { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; white-space: nowrap; }
+/* IP 地址：次显（灰色小字），与主机名区分层级 */
+.connection-address { font-size: 0.72rem; color: var(--color-text); opacity: 0.55; font-family: Consolas, monospace; white-space: nowrap; }
+/* 状态条（notices）：按 level 着色；多条堆叠（notice-stack）；图标脉冲动画表达"进行中" */
 .notice-stack { border-bottom: 1px solid var(--color-border); }
-.status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; display: flex; align-items: center; gap: 0.5rem; }
+.status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; display: flex; align-items: center; gap: 0.5rem; animation: banner-in 0.18s ease-out; }
 .status-banner.info { background: rgba(88, 166, 255, 0.1); color: var(--color-text); }
 .status-banner.warning { background: rgba(210, 153, 34, 0.12); color: #d29922; }
 .status-banner.error { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
+.notice-icon { width: 12px; height: 12px; flex-shrink: 0; animation: icon-pulse 1.6s ease-in-out infinite; }
 .notice-message { flex: 1; }
-.notice-action { flex-shrink: 0; }
+@keyframes banner-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+@keyframes icon-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .panel { display: flex; flex-direction: column; overflow: hidden; }
 /* 断连遮罩容器：文件树/终端区域定位上下文 */
 .panel-relative, .terminal-body { position: relative; }

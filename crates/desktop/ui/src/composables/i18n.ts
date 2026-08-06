@@ -104,7 +104,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.localTitle': 'Local Files',
     'tree.remoteTitle': 'Remote Files',
     'hosts.groupUnassigned': 'Unassigned',
-    'tree.transferLocked': 'Transfer in progress — file tree temporarily locked',
+    'tree.transferLocked': 'Transferring files, file tree temporarily locked',
 
     // 输入对话框
     'prompt.folderName': 'Folder name:',
@@ -118,7 +118,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.reconnecting': 'Reconnecting...',
     'tab.reconnect': 'Reconnect',
     'tab.overlayDisconnected': 'Connection lost',
-    'tab.transferBusy': 'Transfer in progress — bandwidth occupied, commands may be delayed',
+    // 传输期间终端提示：说明命令会延后但不会丢失，避免用户误以为卡住
+    'tab.transferBusy': 'Transferring files, terminal commands will be delayed',
 
     // 状态栏
     'status.running': 'Running',
@@ -228,7 +229,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.localTitle': '本地文件',
     'tree.remoteTitle': '远程文件',
     'hosts.groupUnassigned': '未分组',
-    'tree.transferLocked': '传输进行中，文件树暂时锁定',
+    'tree.transferLocked': '正在传输文件，文件树暂时锁定',
 
     // 输入对话框
     'prompt.folderName': '文件夹名称：',
@@ -242,7 +243,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.reconnecting': '正在重连...',
     'tab.reconnect': '重连',
     'tab.overlayDisconnected': '连接已断开',
-    'tab.transferBusy': '传输进行中，带宽被占满，命令可能延后',
+    // 传输期间终端提示：说明命令会延后但不会丢失，避免用户误以为卡住
+    'tab.transferBusy': '正在传输文件，终端命令将延后执行',
 
     // 状态栏
     'status.running': '运行中',

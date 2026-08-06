@@ -48,11 +48,11 @@ function activeTab() {
   return tabs.value.find(t => t.id === activeTabId.value) ?? null
 }
 
-function openSessionTab(sessionId: string, hostId: string, hostName: string, channelId: string, status: SessionTabState['status'] = 'connected') {
+function openSessionTab(sessionId: string, hostId: string, hostName: string, address: string, channelId: string, status: SessionTabState['status'] = 'connected') {
   // 已存在同主机连接中的标签 → 聚焦（不重复建连）；按 hostId 匹配（name 非唯一，Task 9 由 hostName 迁移）
   const existing = tabs.value.find(t => t.hostId === hostId && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return existing.id }
-  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, sessionId, channelId, status, notices: [] }
+  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, address, sessionId, channelId, status, notices: [] }
   tabs.value.push(tab)
   activeTabId.value = tab.id
   return tab.id
@@ -80,7 +80,6 @@ function restoreDisconnected(tab: SessionTabState) {
   upsertNotice(tab, {
     id: 'disconnected', level: 'error',
     message: t('tab.disconnected', { reason: tab.error || '' }),
-    action: 'reconnect',
   })
 }
 
@@ -253,7 +252,7 @@ async function connectFlow(host: Host, secret: string | null) {
   // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
   await applyPendingCredential()
   const cid = await invoke('open_shell', { sessionId: sid }) as string
-  openSessionTab(sid, host.id, host.name, cid)
+  openSessionTab(sid, host.id, host.name, host.address, cid)
 }
 
 // 连接错误统一处理：超时 / 主机密钥（事件驱动，不处理） / 普通错误
@@ -395,7 +394,7 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
       // 认证未通过：清理待保存凭据（密码无效不落库）
       pendingSaveCredential.value = null
       tab.error = msg.includes('connect-timeout') ? t('toast.connectTimeout') : msg
-      // 重连失败：状态条恢复断开提示（含原因与重连按钮）
+      // 重连失败：状态条恢复断开提示（含原因；重连按钮在断连遮罩中央）
       restoreDisconnected(tab)
       showToast(t('toast.connectionFailed', { err: msg }), 'error', 5000)
     }
@@ -629,10 +628,10 @@ onMounted(async () => {
           tab.status = 'disconnected'
           const reason = detail.reason ?? 'unknown'
           tab.error = reason
+          // 状态条仅显示断开原因；重连按钮在断连遮罩中央（用户反馈：状态条不重复放按钮）
           upsertNotice(tab, {
             id: 'disconnected', level: 'error',
             message: t('tab.disconnected', { reason }),
-            action: 'reconnect',
           })
         }
       },

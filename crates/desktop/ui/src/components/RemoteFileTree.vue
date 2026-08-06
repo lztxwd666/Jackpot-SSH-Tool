@@ -179,7 +179,13 @@ watch(() => props.locked, (locked) => {
         </svg>
       </span>
     </div>
-    <div v-if="locked" class="lock-banner">{{ t('tree.transferLocked') }}</div>
+    <!-- 锁定提示：锁图标 + 脉冲动画（与 SessionTab 状态条风格统一，SVG 无 emoji） -->
+    <div v-if="locked" class="lock-banner">
+      <svg class="lock-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
+      </svg>
+      <span>{{ t('tree.transferLocked') }}</span>
+    </div>
     <div class="tree-body">
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="error" class="error">{{ error }}</div>
@@ -238,9 +244,14 @@ watch(() => props.locked, (locked) => {
 .error { padding: 0.5rem; color: #e5534b; font-size: 0.75rem; text-align: center; }
 .locked { pointer-events: none; opacity: 0.6; }
 .lock-banner {
-  padding: 0.3rem 0.5rem; font-size: 0.72rem; text-align: center;
+  display: flex; align-items: center; justify-content: center; gap: 0.35rem;
+  padding: 0.35rem 0.5rem; font-size: 0.72rem; text-align: center;
   background: rgba(210, 153, 34, 0.15); color: #d29922;
+  animation: banner-in 0.18s ease-out;
 }
+.lock-icon { width: 11px; height: 11px; flex-shrink: 0; animation: icon-pulse 1.6s ease-in-out infinite; }
+@keyframes banner-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+@keyframes icon-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .drag-over {
   outline: 2px solid hsla(160, 100%, 37%, 1);
   outline-offset: -2px;
