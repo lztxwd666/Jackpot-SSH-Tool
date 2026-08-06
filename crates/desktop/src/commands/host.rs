@@ -111,10 +111,22 @@ fn parse_ping_latency(output: &str) -> Option<u64> {
     None
 }
 
+/// Ping 目标校验：仅允许 hostname/IP 字符集（拒绝以 - 开头被解析为选项的输入，
+/// 如 "-t 8.8.8.8" 在 Windows 会进入无限 ping 导致命令永不返回）
+fn is_valid_ping_target(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
+}
+
 /// Ping 主机（诊断工具）：调用系统 ping（Windows -n 1 / 其他 -c 1），解析结果
 /// 定位：诊断用途，不阻塞（spawn_blocking）、不持久化
 #[tauri::command]
 pub async fn ping_host(address: String) -> Result<PingResult, String> {
+    if !is_valid_ping_target(&address) {
+        return Err("invalid ping target".into());
+    }
     let (success, output) = tokio::task::spawn_blocking(move || {
         let output = if cfg!(windows) {
             std::process::Command::new("ping")

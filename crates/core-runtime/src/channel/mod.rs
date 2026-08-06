@@ -24,10 +24,10 @@ pub struct Channel {
     worker: Arc<WorkerHandle>,
 }
 
-/// PTY 终端模式 opcode 常量（参照 libssh2 定义）
+/// PTY 终端模式 opcode 常量（RFC 4254 §8 定义；ICANON=51、ISIG=50，非 2/3）
 const ECHO: u8 = 53;
-const ICANON: u8 = 2;
-const ISIG: u8 = 3;
+const ICANON: u8 = 51;
+const ISIG: u8 = 50;
 const ICRNL: u8 = 36;
 const ONLCR: u8 = 72;
 const OPOST: u8 = 70;
@@ -151,12 +151,12 @@ pub(crate) fn open_sftp_raw(
         channel_type: ChannelType::Sftp,
     }));
 
-    // SFTP 初始化需要在阻塞模式下完成
+    // SFTP 初始化需要在阻塞模式下完成；失败时同样恢复非阻塞
+    // （阻塞模式遗留会使 io_retry 的非阻塞假设失效，worker 可能被单次操作卡住）
     ssh_session.set_blocking(true);
-    let sftp = ssh_session
-        .sftp()
-        .map_err(|e| CoreError::Internal(format!("open sftp failed: {e}")))?;
+    let result = ssh_session.sftp();
     ssh_session.set_blocking(false);
+    let sftp = result.map_err(|e| CoreError::Internal(format!("open sftp failed: {e}")))?;
 
     tracing::info!(%channel_id, %session_id, "sftp channel opened");
     Ok(sftp)

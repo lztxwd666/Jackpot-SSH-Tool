@@ -12,6 +12,10 @@ let term: Terminal
 let fitAddon: FitAddon
 let unlisten: () => void
 let observer: ResizeObserver
+let resizeTimer: number | undefined
+// 卸载标记：await listen 期间组件可能被卸载（重连 :key 重建），
+// 返回后检查标记解绑监听器并中止初始化，防监听器泄漏与对已 dispose 终端的写入
+let disposed = false
 
 onMounted(async () => {
   term = new Terminal({
@@ -28,7 +32,6 @@ onMounted(async () => {
 
   // onResize 必须在 fit() 之前注册，否则初始 resize 事件会丢失
   // resize 防抖：连续调整窗口时避免高频 IPC 调用
-  let resizeTimer: number | undefined
   term.onResize(({ cols, rows }) => {
     if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
     resizeTimer = window.setTimeout(() => {
@@ -62,6 +65,13 @@ onMounted(async () => {
     } catch (_) {}
   })
 
+  // await listen 期间组件可能已卸载（旧通道被 :key 重建）：解绑监听器并中止初始化
+  if (disposed) {
+    unlisten()
+    term.dispose()
+    return
+  }
+
   term.onData((data) => {
     invoke('terminal_send_input', { channelId: props.channelId, data }).catch(() => {})
   })
@@ -76,6 +86,8 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
   observer?.disconnect()
   unlisten?.()
   term?.dispose()

@@ -34,12 +34,12 @@ impl Database {
 
     /// 执行 schema 迁移，将数据库升级到最新版本
     pub fn migrate(&self) -> CoreResult<()> {
-        let guard = self
+        let mut guard = self
             .conn
             .lock()
             .map_err(|e| core_common::CoreError::Internal(e.to_string()))?;
         let conn = guard
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| core_common::CoreError::Internal("database closed".into()))?;
         migrations::run_migrations(conn)
     }

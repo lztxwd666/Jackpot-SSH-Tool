@@ -32,13 +32,15 @@ const KEEPALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3
 const SFTP_CHUNK_SIZE: usize = 65536;
 
 /// keepalive 间隔判定：now 距 last 达到 interval 返回 true
+/// None 表示无计时起点（连接建立前）：返回 false 不发送；
+/// 连接建立时 last_keepalive 置为连接时刻，30 秒后首次到期（首轮不立即发送）
 fn keepalive_due(
     last: Option<std::time::Instant>,
     now: std::time::Instant,
     interval: std::time::Duration,
 ) -> bool {
     match last {
-        None => false, // 从未发送：连接刚建立，首轮不立即发送
+        None => false, // 无计时起点：未连接状态
         Some(l) => now.duration_since(l) >= interval,
     }
 }
@@ -227,6 +229,10 @@ struct Worker {
     rx: tokio::sync::mpsc::UnboundedReceiver<WorkerCommand>, // 命令队列（嵌套 try_recv 取命令）
     transferring: bool,                // 传输进行中：拒绝嵌套传输
     hash_cmd: Option<HashCommand>,     // 远端哈希命令探测结果缓存（会话级）
+    // 传输中到达的断开/关闭（延迟处理）：cancel 置位立即中止传输，但连接释放必须等
+    // 传输栈弹出（其局部 ssh2::File drop 会解引用 session，提前释放即 use-after-free）
+    pending_disconnect: Option<String>,
+    pending_close: bool,
 }
 
 impl Worker {
@@ -249,6 +255,8 @@ impl Worker {
             rx,
             transferring: false,
             hash_cmd: None,
+            pending_disconnect: None,
+            pending_close: false,
         }
     }
 
@@ -293,8 +301,8 @@ impl Worker {
                 // 复位传输取消标志：上一次断开置位后，新连接上的传输不得被残留标志误取消
                 self.cancel
                     .store(false, std::sync::atomic::Ordering::Relaxed);
-                // 重置 keepalive 计时：新连接首轮不立即发送（keepalive_due(None,..) 为 false）
-                self.last_keepalive = None;
+                // keepalive 计时起点：以连接建立时刻计，30 秒空闲后到期发送（首轮不立即发送）
+                self.last_keepalive = Some(std::time::Instant::now());
                 self.write_state(SessionState::Connected)?;
                 self.dispatch(CoreEvent::Session(SessionEvent::Connected {
                     session_id: self.session_id(),
@@ -311,9 +319,16 @@ impl Worker {
     /// 断开 SSH 连接（worker 内执行），状态转为 Disconnected（可重连）
     /// 断开即断：置位取消标志，传输循环（transfer_*_inner）在下一个 chunk 检查点立即中止
     /// reason：断开原因（异常断开时随 Disconnected 事件广播，供 UI 展示）
+    /// 传输进行中调用时延迟释放连接（cancel 置位立即中止传输；连接与通道的释放推迟到
+    /// 传输栈弹出后的 flush_pending，否则传输函数内 ssh2::File drop 会解引用已释放的
+    /// session，use-after-free）
     fn disconnect_inner(&mut self, reason: &str) {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        if self.transferring {
+            self.pending_disconnect = Some(reason.to_string());
+            return;
+        }
         self.close_all_channels_inner();
         if let Some(mut conn) = self.connection.take() {
             let _ = conn.disconnect();
@@ -323,6 +338,23 @@ impl Worker {
                 session_id: self.session_id(),
                 reason: reason.to_string(),
             }));
+        }
+    }
+
+    /// 传输结束后冲刷挂起的断开/关闭（传输期间到达的 Disconnect/Close 延迟处理）
+    /// 必须在传输函数返回、其局部 ssh2 句柄已 drop 后调用；Close 优先于 Disconnect
+    /// （关闭即断开），并保持 Disconnected → Closed 的事件顺序
+    fn flush_pending(&mut self) {
+        if self.pending_close {
+            self.pending_close = false;
+            self.disconnect_inner("session closed");
+            self.closed = true;
+            let _ = self.write_state(SessionState::Closed);
+            self.dispatch(CoreEvent::Session(SessionEvent::Closed {
+                session_id: self.session_id(),
+            }));
+        } else if let Some(reason) = self.pending_disconnect.take() {
+            self.disconnect_inner(&reason);
         }
     }
 
@@ -427,17 +459,11 @@ impl Worker {
             .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
         match inner {
             ChannelInner::Session(ch) => {
-                let mut written = 0;
-                while written < data.len() {
-                    match io_retry(|| ch.write(&data[written..]), &self.cancel) {
-                        Ok(n) => written += n,
-                        Err(e) => {
-                            // 写失败（连接已死）：主动断开并广播（原因供 UI 展示）
-                            let msg = format!("channel write failed: {e}");
-                            self.disconnect_inner(&msg);
-                            return Err(CoreError::Internal(msg));
-                        }
-                    }
+                if let Err(e) = write_full(&self.cancel, |buf| ch.write(buf), data) {
+                    // 写失败（连接已死或已断开）：主动断开并广播（原因供 UI 展示）
+                    let msg = format!("channel write failed: {e}");
+                    self.disconnect_inner(&msg);
+                    return Err(CoreError::Internal(msg));
                 }
                 Ok(())
             }
@@ -702,16 +728,9 @@ impl Worker {
                 if n == 0 {
                     break;
                 }
-                // 写入完整块（处理 EAGAIN 与部分写入；统一走 io_retry，退避期间不得处理其他通道）
-                let mut off = 0;
-                while off < n {
-                    match io_retry(|| file.write(&chunk[off..n]), &self.cancel) {
-                        Ok(w) => off += w,
-                        Err(e) => {
-                            return Err(CoreError::Internal(format!("sftp write failed: {e}")));
-                        }
-                    }
-                }
+                // 写入完整块（EAGAIN 与零进度统一由 write_full 处理；退避期间不得处理其他通道）
+                write_full(&self.cancel, |buf| file.write(buf), &chunk[..n])
+                    .map_err(|e| CoreError::Internal(format!("sftp write failed: {e}")))?;
                 done += n as u64;
                 let _ = progress.send((done, total));
             }
@@ -779,13 +798,19 @@ impl Worker {
                 self.disconnect_inner("disconnected by user");
             }
             WorkerCommand::Close => {
-                self.disconnect_inner("session closed");
-                self.closed = true;
-                let _ = self.write_state(SessionState::Closed);
-                self.dispatch(CoreEvent::Session(SessionEvent::Closed {
-                    session_id: self.session_id(),
-                }));
-                return false; // 结束线程
+                if self.transferring {
+                    // 传输进行中：断开延迟（disconnect_inner 内部处理），关闭状态与线程
+                    // 退出由 flush_pending 在传输栈弹出后统一完成（保持事件顺序）
+                    self.pending_close = true;
+                } else {
+                    self.disconnect_inner("session closed");
+                    self.closed = true;
+                    let _ = self.write_state(SessionState::Closed);
+                    self.dispatch(CoreEvent::Session(SessionEvent::Closed {
+                        session_id: self.session_id(),
+                    }));
+                    return false; // 结束线程
+                }
             }
             WorkerCommand::Exec { command, reply } => {
                 let r = self.exec_inner(&command);
@@ -858,6 +883,8 @@ impl Worker {
                     return !self.closed;
                 }
                 let r = self.handle_transfer_inner(kind, &remote, &local, progress);
+                // 传输中到达的断开/关闭在传输栈弹出后冲刷（延迟释放连接，防 use-after-free）
+                self.flush_pending();
                 let _ = reply.send(r);
             }
         }
@@ -935,6 +962,33 @@ impl Worker {
             }
         }
     }
+}
+
+/// 完整写入（通道写入与上传传输共用）：处理部分写入与零进度
+/// libssh2 写窗口满时返回 Ok(0)（非 EAGAIN，io_retry 对 Ok 无退避），不加防护会
+/// 无限忙循环且不可中断；零进度短退避后重试，取消标志（断开）置位立即中止
+fn write_full<W>(cancel: &AtomicBool, mut write: W, data: &[u8]) -> CoreResult<()>
+where
+    // ssh2 的 Channel/File 实现 std::io::Write（返回 io::Error；is_would_block 已兼容）
+    W: FnMut(&[u8]) -> Result<usize, std::io::Error>,
+{
+    let mut written = 0;
+    while written < data.len() {
+        match io_retry(|| write(&data[written..]), cancel) {
+            Ok(0) => {
+                // 零进度：写窗口满，短退避后重试；断开（cancel 置位）立即中止
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(CoreError::Internal("write cancelled".into()));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(n) => written += n,
+            Err(e) => {
+                return Err(CoreError::Internal(format!("ssh2 write failed: {e}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// 对 sftp 通道执行一次操作并统一 EAGAIN 重试（io_retry）

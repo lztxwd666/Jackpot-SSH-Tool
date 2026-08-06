@@ -14,7 +14,6 @@ pub async fn create_session(state: State<'_, Arc<AppState>>) -> Result<String, S
     Ok(session.id.to_string())
 }
 
-
 /// 使用指定配置连接 Session
 /// 支持密码、私钥、Agent 三种认证方式
 #[allow(clippy::too_many_arguments)]
@@ -37,12 +36,9 @@ pub async fn connect_session(
     let session = rt.get_session(&sid).await.ok_or("session not found")?;
 
     let auth = match auth_type.as_str() {
-        "password" => core_common::AuthMethod::Password(
-            password.unwrap_or_default(),
-        ),
+        "password" => core_common::AuthMethod::Password(password.unwrap_or_default()),
         "private_key" => {
-            let path = private_key_path
-                .ok_or("private key path is required")?;
+            let path = private_key_path.ok_or("private key path is required")?;
             core_common::AuthMethod::PrivateKey {
                 path: std::path::PathBuf::from(path),
                 passphrase: private_key_passphrase,
@@ -65,7 +61,6 @@ pub async fn connect_session(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
-
 
 /// 为指定 Session 打开一个 Shell Channel，返回 channel_id
 #[tauri::command]
@@ -117,7 +112,6 @@ pub async fn open_shell(
     Ok(channel_id.to_string())
 }
 
-
 /// 前端 Terminal 组件挂载完成后调用
 /// worker 模型下读循环由 worker 空闲工作承担，此命令保留为兼容 no-op（Vue 侧无需改动）
 #[tauri::command]
@@ -125,11 +119,10 @@ pub async fn start_terminal(
     state: State<'_, Arc<AppState>>,
     channel_id: String,
 ) -> Result<(), String> {
-    let _ = ChannelId::parse(&channel_id)?;   // 仅校验参数格式
+    let _ = ChannelId::parse(&channel_id)?; // 仅校验参数格式
     let _ = state;
     Ok(())
 }
-
 
 /// 向指定 Channel 发送终端输入
 #[tauri::command]
@@ -142,16 +135,12 @@ pub async fn terminal_send_input(
 
     let channels = state.channels.read().await;
     let channel = channels.get(&cid).ok_or("channel not found")?;
-    channel
-        .write(data.into_bytes())
-        .await
-        .map_err(|e| {
-            tracing::error!(%cid, %e, "terminal_send_input failed");
-            e.to_string()
-        })?;
+    channel.write(data.into_bytes()).await.map_err(|e| {
+        tracing::error!(%cid, %e, "terminal_send_input failed");
+        e.to_string()
+    })?;
     Ok(())
 }
-
 
 /// 调整终端 PTY 尺寸
 #[tauri::command]
@@ -166,10 +155,12 @@ pub async fn terminal_resize(
     let channels = state.channels.read().await;
     let channel = channels.get(&cid).ok_or("channel not found")?.clone();
     drop(channels);
-    channel.resize_pty(cols, rows).await.map_err(|e| e.to_string())?;
+    channel
+        .resize_pty(cols, rows)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
-
 
 /// 关闭终端连接，清理 Session 和 Channel 资源
 #[tauri::command]
@@ -211,4 +202,3 @@ pub async fn terminal_close(
 
     Ok(())
 }
-

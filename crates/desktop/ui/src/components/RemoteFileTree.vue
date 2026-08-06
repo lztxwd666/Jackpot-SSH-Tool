@@ -43,15 +43,22 @@ function parentPath(p: string): string {
   return '/' + parts.join('/')
 }
 
+// 请求序号：快速连续切换目录时旧响应不得覆盖新目录（响应乱序导致
+// 列表与 currentPath 错配，右键删除/重命名会作用到错误目录）
+let loadSeq = 0
 async function loadDir(path: string) {
   if (!props.sessionId) return
+  const seq = ++loadSeq
   loading.value = true; error.value = ''
   try {
-    files.value = await invoke('sftp_list_dir', { sessionId: props.sessionId, path })
+    const result = await invoke('sftp_list_dir', { sessionId: props.sessionId, path }) as FileNode[]
+    if (seq !== loadSeq) return // 过期响应：已有更新的请求
+    files.value = result
     currentPath.value = path
     loaded.value = true
     emit('current-dir', path)
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = String(e)
     console.error('sftp_list_dir failed:', e)
   }
@@ -98,11 +105,8 @@ function onDrop(e: DragEvent) {
     showToast(t('toast.systemFileDrop'), 'warning', 6000)
     return
   }
-  let localPath = dt.getData(LOCAL_DRAG_TYPE)
-  if (!localPath) {
-    const tp = dt.getData('text/plain') || ''
-    if (tp.startsWith('local:')) localPath = tp.slice(6)
-  }
+  // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
+  const localPath = dt.getData(LOCAL_DRAG_TYPE)
   if (localPath) {
     emit('upload', currentPath.value, localPath)
   }

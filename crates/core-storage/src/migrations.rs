@@ -53,7 +53,9 @@ ALTER TABLE hosts ADD COLUMN save_password INTEGER NOT NULL DEFAULT 0;
 
 /// 运行所有必要的迁移脚本，将 schema 从当前版本升级到 SCHEMA_VERSION
 /// 仅在数据库版本低于目标版本时才执行迁移
-pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
+/// 整体包在事务内：DDL 与版本行写入原子提交，中断（断电/崩溃）不会留下
+/// "列已加但版本号未记录"的半迁移态（重跑时 ALTER TABLE 非幂等会失败卡死数据库）
+pub fn run_migrations(conn: &mut rusqlite::Connection) -> CoreResult<()> {
     let current_version: i32 = conn
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
@@ -62,10 +64,14 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
         )
         .unwrap_or(0);
 
+    let tx = conn
+        .transaction()
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
+
     if current_version < 1 {
-        conn.execute_batch(MIGRATION_V1)
+        tx.execute_batch(MIGRATION_V1)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
             [1],
         )
@@ -74,9 +80,9 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
     }
 
     if current_version < 2 {
-        conn.execute_batch(MIGRATION_V2)
+        tx.execute_batch(MIGRATION_V2)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
             [2],
         )
@@ -85,9 +91,9 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
     }
 
     if current_version < 3 {
-        conn.execute_batch(MIGRATION_V3)
+        tx.execute_batch(MIGRATION_V3)
             .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO _schema_version (version) VALUES (?1)",
             [SCHEMA_VERSION],
         )
@@ -95,5 +101,7 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> CoreResult<()> {
         tracing::info!("database migrated to version 3");
     }
 
+    tx.commit()
+        .map_err(|e| core_common::CoreError::Storage(Box::new(e)))?;
     Ok(())
 }

@@ -46,13 +46,20 @@ function parentPath(p: string): string {
   return parent
 }
 
+// 请求序号：快速连续切换目录时旧响应不得覆盖新目录（响应乱序导致
+// 列表与 currentPath 错配，右键删除/重命名会作用到错误目录）
+let loadSeq = 0
 async function loadDir(path: string) {
+  const seq = ++loadSeq
   loading.value = true
   try {
-    files.value = await invoke('read_local_dir', { path })
+    const result = await invoke('read_local_dir', { path }) as FileNode[]
+    if (seq !== loadSeq) return // 过期响应：已有更新的请求
+    files.value = result
     currentPath.value = path
     emit('current-dir', path)
   } catch (e) {
+    if (seq !== loadSeq) return
     console.error('read_local_dir failed:', e)
   }
   loading.value = false
@@ -87,11 +94,8 @@ function onDrop(e: DragEvent) {
     showToast(t('toast.systemFileDrop'), 'warning', 6000)
     return
   }
-  let remotePath = dt.getData(REMOTE_DRAG_TYPE)
-  if (!remotePath) {
-    const tp = dt.getData('text/plain') || ''
-    if (tp.startsWith('remote:')) remotePath = tp.slice(7)
-  }
+  // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
+  const remotePath = dt.getData(REMOTE_DRAG_TYPE)
   if (remotePath) {
     emit('download', remotePath, currentPath.value)
   }

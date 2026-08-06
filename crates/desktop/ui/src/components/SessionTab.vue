@@ -22,6 +22,8 @@ export interface SessionTabState {
   locked?: boolean
   // 状态条提示列表（事件驱动 upsert/remove，可扩展：新提示 = 新事件映射，渲染零改动）
   notices: TabNotice[]
+  // 关闭取消标记：closeTab 置位，进行中的重连流程在各 await 检查点中止（迟到成功不操作已关闭标签）
+  cancelled: boolean
 }
 
 // 状态条提示（terminal 顶部）：统一模型，事件分派器按 id 增删

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// SSH 连接配置，包含目标主机、端口、用户名和认证方式
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 不实现 Serialize/Deserialize：auth_method 含明文凭据（见 AuthMethod 注释）
+#[derive(Debug, Clone)]
 pub struct ConnectionConfig {
     pub host: String,
     pub port: u16,
@@ -39,8 +40,10 @@ impl ConnectionConfig {
 }
 
 /// SSH 认证方式
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(tag = "method", content = "data")]
+/// 不实现 Serialize/Deserialize：Password 与 PrivateKey.passphrase 含明文凭据，
+/// 序列化即泄漏（与 Credential 刻意不派生 Serialize 的安全约定一致）；
+/// 当前无序列化使用点（desktop 逐参数传 IPC，认证在 core-runtime 内构造）
+#[derive(Clone)]
 pub enum AuthMethod {
     /// 密码认证
     Password(String),

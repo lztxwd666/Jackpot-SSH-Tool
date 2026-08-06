@@ -52,7 +52,7 @@ function openSessionTab(sessionId: string, hostId: string, hostName: string, add
   // 已存在同主机连接中的标签 → 聚焦（不重复建连）；按 hostId 匹配（name 非唯一，Task 9 由 hostName 迁移）
   const existing = tabs.value.find(t => t.hostId === hostId && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return existing.id }
-  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, address, sessionId, channelId, status, notices: [] }
+  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, address, sessionId, channelId, status, notices: [], cancelled: false }
   tabs.value.push(tab)
   activeTabId.value = tab.id
   return tab.id
@@ -86,6 +86,8 @@ function restoreDisconnected(tab: SessionTabState) {
 function closeTab(tabId: string) {
   const tab = tabs.value.find(t => t.id === tabId)
   if (!tab) return
+  // 取消标记：进行中的重连流程在各检查点中止（迟到成功不得操作已关闭标签、不得新建通道）
+  tab.cancelled = true
   if (tab.sessionId) {
     invoke('terminal_close', { sessionId: tab.sessionId }).catch(() => {})
   }
@@ -215,10 +217,15 @@ async function connectHost(host: Host) {
 // connecting 卡 true 会吞掉所有后续连接操作（用户实测"断开后无法连接"现象）
 const CONNECT_TIMEOUT_MS = 45_000
 
-// 带超时的 Promise 包装：超时 reject 标记错误 'connect-timeout'
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+// 连接/重连流程取消令牌：超时（onTimeout 置位）或标签关闭（tab.cancelled）时置位，
+// 流程各 await 检查点中止，杜绝迟到成功产生的幽灵标签/状态回翻
+interface FlowCancel { cancelled: boolean }
+
+// 带超时的 Promise 包装：超时 reject 标记错误 'connect-timeout'，并回调 onTimeout
+// （调用方借此置位取消令牌）；超时后原 Promise 迟到 settle 被 then 消费，无 unhandled rejection
+function withTimeout<T>(p: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
   return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('connect-timeout')), ms)
+    const timer = window.setTimeout(() => { onTimeout?.(); reject(new Error('connect-timeout')) }, ms)
     p.then(
       (v) => { window.clearTimeout(timer); resolve(v) },
       (e) => { window.clearTimeout(timer); reject(e) },
@@ -229,16 +236,23 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 // 执行连接：create_session → connect_session → open_shell → 打开标签
 async function doConnectWith(host: Host, secret: string | null) {
   connecting.value = true
+  const cancel: FlowCancel = { cancelled: false }
   try {
-    await withTimeout(connectFlow(host, secret), CONNECT_TIMEOUT_MS)
+    await withTimeout(connectFlow(host, secret, cancel), CONNECT_TIMEOUT_MS, () => { cancel.cancelled = true })
   } catch (e) {
     handleConnectError(e)
   } finally { connecting.value = false }
 }
 
 // 连接序列（超时保护范围：create_session 起至标签打开）
-async function connectFlow(host: Host, secret: string | null) {
+// 取消（超时/异常）路径：各 await 检查点抛 'connect-cancelled'，由 handleConnectError 静默清理；
+// 已创建/已连接的 session 显式 terminal_close 回收（避免后端会话泄漏）
+async function discardSession(sessionId: string) {
+  await invoke('terminal_close', { sessionId }).catch(() => {})
+}
+async function connectFlow(host: Host, secret: string | null, cancel: FlowCancel) {
   const sid = await invoke('create_session') as string
+  if (cancel.cancelled) { await discardSession(sid); throw new Error('connect-cancelled') }
   // 保存连接参数：主机密钥确认后自动重连需要
   pendingConnectHost.value = { host, password: secret ?? '' }
   await invoke('connect_session', {
@@ -246,18 +260,26 @@ async function connectFlow(host: Host, secret: string | null) {
     username: host.username, authType: host.auth_type,
     password: secret, privateKeyPath: null, privateKeyPassphrase: null,
   })
+  if (cancel.cancelled) { await discardSession(sid); throw new Error('connect-cancelled') }
   // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
   password.value = ''
   pendingConnectHost.value = null
   // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
   await applyPendingCredential()
   const cid = await invoke('open_shell', { sessionId: sid }) as string
+  if (cancel.cancelled) { await discardSession(sid); throw new Error('connect-cancelled') }
   openSessionTab(sid, host.id, host.name, host.address, cid)
 }
 
-// 连接错误统一处理：超时 / 主机密钥（事件驱动，不处理） / 普通错误
+// 连接错误统一处理：取消 / 超时 / 主机密钥（事件驱动，不处理） / 普通错误
 function handleConnectError(e: unknown) {
   const msg = String(e)
+  // 流程取消（超时已弹过 toast，或标签关闭）：静默清理待确认参数与待保存凭据
+  if (msg.includes('connect-cancelled')) {
+    pendingConnectHost.value = null
+    pendingSaveCredential.value = null
+    return
+  }
   // 主机密钥场景由 HostKey 事件驱动确认弹窗：不重复报错、不在控制台记录指纹
   if (msg.includes('host key')) return
   // 超时：清理待确认参数与待保存凭据（连接未建立，凭据不落库）；未完成的 session 由 Drop 回收
@@ -340,6 +362,9 @@ async function applyPendingCredential() {
 // 复用同一 SessionId 重新 connect_session → open_shell，新通道 ID 触发 Terminal :key 重建
 async function reconnectTab(tab: SessionTabState) {
   if (!tab.sessionId) return
+  // 互斥：连接/重连进行中忽略新的重连请求（与 connectHost 一致，
+  // 防并发流程共享 pendingConnectHost/pendingSaveCredential 导致上下文错配）
+  if (connecting.value) return
   tab.status = 'reconnecting'
   // 按 hostId 找回主机（重命名后 hostName 已过期，hostId 才是稳定标识）
   const host = hosts.value.find(h => h.id === tab.hostId)
@@ -382,10 +407,17 @@ async function reconnectTab(tab: SessionTabState) {
 // 与 doConnectWith 的区别：不复用 openSessionTab，直接更新 tab 的 channelId/status
 async function doReconnectWith(host: Host, secret: string | null, tab: SessionTabState) {
   connecting.value = true
+  const cancel: FlowCancel = { cancelled: false }
   try {
-    await withTimeout(reconnectFlow(host, secret, tab), CONNECT_TIMEOUT_MS)
+    await withTimeout(reconnectFlow(host, secret, tab, cancel), CONNECT_TIMEOUT_MS, () => { cancel.cancelled = true })
   } catch (e) {
     const msg = String(e)
+    // 流程取消（超时已弹过 toast / 标签已关闭）：静默，不重复报错
+    if (msg.includes('connect-cancelled') || tab.cancelled) {
+      pendingConnectHost.value = null
+      pendingSaveCredential.value = null
+      return
+    }
     const isHostKeyError = msg.includes('host key')
     // 主机密钥场景由 HostKey 事件驱动确认弹窗：保留 pendingConnectHost 与断开原因，
     // 不重复报错、不改状态（确认/拒绝后的终态由 handleHostKey 决定）
@@ -404,18 +436,21 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
 }
 
 // 重连序列（超时保护范围同 doConnectWith）
-async function reconnectFlow(host: Host, secret: string | null, tab: SessionTabState) {
+// 取消检查：cancel（超时）或 tab.cancelled（标签关闭）；会话复用不回收（用户可再次重连）
+async function reconnectFlow(host: Host, secret: string | null, tab: SessionTabState, cancel: FlowCancel) {
   await invoke('connect_session', {
     sessionId: tab.sessionId, host: host.address, port: host.port,
     username: host.username, authType: host.auth_type,
     password: secret, privateKeyPath: null, privateKeyPassphrase: null,
   })
+  if (cancel.cancelled || tab.cancelled) throw new Error('connect-cancelled')
   // 连接成功后及时清空密码（减少在 JS 堆中的驻留时间）
   password.value = ''
   pendingConnectHost.value = null
   // 认证已通过：弹框勾选"保存此密码"的凭据在此落库
   await applyPendingCredential()
   const cid = await invoke('open_shell', { sessionId: tab.sessionId }) as string
+  if (cancel.cancelled || tab.cancelled) throw new Error('connect-cancelled')
   // 新通道 ID 触发 Terminal :key 重建：旧终端画面作废，全新会话视图
   tab.channelId = cid
   tab.status = 'connected'
