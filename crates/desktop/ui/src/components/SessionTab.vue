@@ -31,7 +31,7 @@ export interface SessionTabState {
 // 操作按钮不放在提示里（用户反馈：重连按钮集中在断连遮罩中央，状态条仅提示状态）
 export interface TabNotice {
   id: string            // 稳定标识（upsert/remove 用，如 'transfer-busy'）
-  level: 'info' | 'warning' | 'error'
+  level: 'info' | 'warning' | 'error' | 'verifying'
   message: string       // 已翻译文案（t() 生成）
 }
 
@@ -124,6 +124,8 @@ function uploadFromLocal(localPath: string) {
 .status-banner.info { background: rgba(88, 166, 255, 0.1); color: var(--color-text); }
 .status-banner.warning { background: rgba(210, 153, 34, 0.12); color: #d29922; }
 .status-banner.error { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
+/* 校验中（传输完成后的完整性校验阶段）：绿色表达"即将完成"的积极状态 */
+.status-banner.verifying { background: rgba(46, 160, 67, 0.12); color: #2ea043; }
 .notice-icon { width: 12px; height: 12px; flex-shrink: 0; animation: icon-pulse 1.6s ease-in-out infinite; }
 .notice-message { flex: 1; }
 @keyframes banner-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
