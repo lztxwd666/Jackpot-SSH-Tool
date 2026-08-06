@@ -70,18 +70,28 @@ export function closeDialog(result: DialogResult) {
 export interface Toast {
   id: number
   message: string
-  type: 'info' | 'success' | 'error' | 'warning'
+  type: 'info' | 'success' | 'error' | 'warning' | 'verifying'
 }
 
 let toastSeq = 0
 export const toasts = reactive<Toast[]>([])
 
-/** 非阻塞提示，自动消失 */
-export function showToast(message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info', duration = 3500) {
+/** 非阻塞提示，自动消失；duration 传 0 表示不自动消失（由调用方 removeToast 移除，如校验中提示）；
+ * 返回 toast id 供手动移除 */
+export function showToast(message: string, type: 'info' | 'success' | 'error' | 'warning' | 'verifying' = 'info', duration = 3500): number {
   const id = ++toastSeq
   toasts.push({ id, message, type })
-  window.setTimeout(() => {
-    const i = toasts.findIndex((t) => t.id === id)
-    if (i >= 0) toasts.splice(i, 1)
-  }, duration)
+  if (duration > 0) {
+    window.setTimeout(() => {
+      const i = toasts.findIndex((t) => t.id === id)
+      if (i >= 0) toasts.splice(i, 1)
+    }, duration)
+  }
+  return id
+}
+
+/** 手动移除指定 toast（配合 duration 0 的常驻提示使用） */
+export function removeToast(id: number) {
+  const i = toasts.findIndex((t) => t.id === id)
+  if (i >= 0) toasts.splice(i, 1)
 }

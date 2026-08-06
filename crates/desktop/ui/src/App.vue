@@ -8,7 +8,7 @@ import TransferPanel from './components/TransferPanel.vue'
 import ToastStack from './components/ToastStack.vue'
 import SessionTab, { type SessionTabState, type TabNotice } from './components/SessionTab.vue'
 import { routeCoreEvent } from './composables/events'
-import { dialogState, closeDialog, confirmDialog, showToast } from './composables/dialog'
+import { dialogState, closeDialog, confirmDialog, showToast, removeToast } from './composables/dialog'
 import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
@@ -559,6 +559,10 @@ interface TransferTask {
 
 // 已取消的传输（taskId）：closeTab 关闭会话时置位，迟到结果静默（不弹失败 toast、不刷新树）
 const cancelledTransfers = new Set<string>()
+
+// 校验中 toast（taskId → toast id）：传输完成进入校验时弹出绿色常驻提示，
+// 校验完成（成功/失败/取消）时移除，随后"已下载到"等结果 toast 同位置衔接
+const verifyingToasts: Record<string, number> = {}
 // 与后端 commands/sftp.rs 的 TransferProgress 结构对应
 interface TransferProgress {
   id: string
@@ -618,9 +622,12 @@ async function downloadFile(sessionId: string, remotePath: string, localDir?: st
     showToast(t('toast.downloadFailed', { err: String(e) }), 'error', 5000)
   } finally {
     downloading.value[remotePath] = false
-    // 校验完成（成功/失败/取消）：移除顶部"校验中"提示（标签已关则无需处理）
-    const verifyTab = tabs.value.find(t => t.sessionId === sessionId)
-    if (verifyTab) removeNotice(verifyTab, 'verifying')
+    // 校验完成（成功/失败/取消）：移除"校验中"toast（随后结果 toast 同位置衔接）
+    const vt = verifyingToasts[taskId]
+    if (vt !== undefined) {
+      removeToast(vt)
+      delete verifyingToasts[taskId]
+    }
     if (cancelledTransfers.has(taskId)) {
       cancelledTransfers.delete(taskId)
       delete transfers.value[taskId]
@@ -660,9 +667,12 @@ async function uploadFile(sessionId: string, remoteDir: string, localPath: strin
     showToast(t('toast.uploadFailed', { err: String(e) }), 'error', 5000)
   } finally {
     uploading.value[localPath] = false
-    // 校验完成（成功/失败/取消）：移除顶部"校验中"提示
-    const verifyTab = tabs.value.find(t => t.sessionId === sessionId)
-    if (verifyTab) removeNotice(verifyTab, 'verifying')
+    // 校验完成（成功/失败/取消）：移除"校验中"toast
+    const vt = verifyingToasts[taskId]
+    if (vt !== undefined) {
+      removeToast(vt)
+      delete verifyingToasts[taskId]
+    }
     if (cancelledTransfers.has(taskId)) {
       cancelledTransfers.delete(taskId)
       delete transfers.value[taskId]
@@ -758,11 +768,10 @@ onMounted(async () => {
       tr.done = event.payload.done
       tr.total = event.payload.total
     }
-    // 校验阶段：顶部状态条显示绿色"校验中"提示（醒目，且完成时提示消失 + 下方
-    // toast 出现，完成过渡直观）；对应标签可能已关闭则跳过
-    if (event.payload.verifying && tr) {
-      const tab = tabs.value.find(t => t.sessionId === tr.sessionId)
-      if (tab) upsertNotice(tab, { id: 'verifying', level: 'verifying', message: t('transfer.verifying') })
+    // 校验阶段：顶部弹出绿色"校验中..."常驻 toast（与"已下载到"等结果 toast 同位置，
+    // 校验完移除后结果 toast 接上，衔接直观）；同一传输重复事件幂等（已存在不重复弹）
+    if (event.payload.verifying && verifyingToasts[event.payload.id] === undefined) {
+      verifyingToasts[event.payload.id] = showToast(t('transfer.verifying'), 'verifying', 0)
     }
   })
 })

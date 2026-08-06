@@ -27,4 +27,10 @@ import { toasts } from '../composables/dialog'
   background: rgba(210, 153, 34, 0.12);
   font-weight: 600;
 }
+/* 校验中（传输完成后的完整性校验阶段）：绿色常驻提示（duration 0，校验完由调用方移除） */
+.toast.verifying {
+  border-color: #2ea043; color: #2ea043;
+  background: rgba(46, 160, 67, 0.12);
+  font-weight: 600;
+}
 </style>
