@@ -18,6 +18,17 @@ export interface SessionTabState {
   error?: string
   // 传输进行中锁定远程文件树（按 tab 粒度，Task 7 从旧全局 remoteTreeLocked 迁移而来）
   locked?: boolean
+  // 状态条提示列表（事件驱动 upsert/remove，可扩展：新提示 = 新事件映射，渲染零改动）
+  notices: TabNotice[]
+}
+
+// 状态条提示（terminal 顶部）：统一模型，事件分派器按 id 增删
+// 新提示只需在分派器加一条事件映射（如未来"端口转发中"），无需改渲染
+export interface TabNotice {
+  id: string            // 稳定标识（upsert/remove 用，如 'transfer-busy'）
+  level: 'info' | 'warning' | 'error'
+  message: string       // 已翻译文案（t() 生成）
+  action?: 'reconnect'  // 可选操作按钮（现仅手动重连）
 }
 
 const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remoteRefreshKey: number; locked?: boolean }>()
@@ -27,16 +38,6 @@ const emit = defineEmits<{
   (e: 'download', remotePath: string, localDir?: string): void
   (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string): void
 }>()
-
-// 状态条文案：连接中 / 已断开（原因）/ 重连中；连接成功不显示状态条
-function statusText(tab: SessionTabState): string {
-  switch (tab.status) {
-    case 'connecting': return t('tab.connecting')
-    case 'disconnected': return t('tab.disconnected', { reason: tab.error || '' })
-    case 'reconnecting': return t('tab.reconnecting')
-    default: return ''
-  }
-}
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
 const localCurrentDir = ref('')
@@ -79,9 +80,12 @@ function uploadFromLocal(localPath: string) {
       <div class="terminal-header">
         <span class="connection-info">{{ tab.hostName }}</span>
       </div>
-      <!-- 状态条：连接中 / 已断开（原因）/ 重连中 -->
-      <div v-if="tab.status !== 'connected'" class="status-banner" :class="tab.status">
-        {{ statusText(tab) }}
+      <!-- 状态条：notices 统一渲染（可多条堆叠；断连遮罩的重连按钮与此并行） -->
+      <div v-if="tab.notices.length" class="notice-stack">
+        <div v-for="n in tab.notices" :key="n.id" class="status-banner" :class="n.level">
+          <span class="notice-message">{{ n.message }}</span>
+          <button v-if="n.action === 'reconnect'" class="btn btn-primary notice-action" @click="emit('reconnect')">{{ t('tab.reconnect') }}</button>
+        </div>
       </div>
       <div class="terminal-body">
         <Terminal v-if="tab.channelId" :channelId="tab.channelId" :key="tab.channelId" />
@@ -101,9 +105,14 @@ function uploadFromLocal(localPath: string) {
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; }
-.status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; border-bottom: 1px solid var(--color-border); }
-.status-banner.connecting, .status-banner.reconnecting { background: rgba(210, 153, 34, 0.12); color: #d29922; }
-.status-banner.disconnected { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
+/* 状态条（notices）：按 level 着色；多条堆叠（notice-stack） */
+.notice-stack { border-bottom: 1px solid var(--color-border); }
+.status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; display: flex; align-items: center; gap: 0.5rem; }
+.status-banner.info { background: rgba(88, 166, 255, 0.1); color: var(--color-text); }
+.status-banner.warning { background: rgba(210, 153, 34, 0.12); color: #d29922; }
+.status-banner.error { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
+.notice-message { flex: 1; }
+.notice-action { flex-shrink: 0; }
 .panel { display: flex; flex-direction: column; overflow: hidden; }
 /* 断连遮罩容器：文件树/终端区域定位上下文 */
 .panel-relative, .terminal-body { position: relative; }

@@ -6,7 +6,7 @@ import HostPanel, { type Host } from './components/HostPanel.vue'
 import HostFormPanel, { type HostForm } from './components/HostFormPanel.vue'
 import TransferPanel from './components/TransferPanel.vue'
 import ToastStack from './components/ToastStack.vue'
-import SessionTab, { type SessionTabState } from './components/SessionTab.vue'
+import SessionTab, { type SessionTabState, type TabNotice } from './components/SessionTab.vue'
 import { routeCoreEvent } from './composables/events'
 import { dialogState, closeDialog, confirmDialog, showToast } from './composables/dialog'
 import { t, getLocale, setLocale, type Locale } from './composables/i18n'
@@ -52,10 +52,36 @@ function openSessionTab(sessionId: string, hostId: string, hostName: string, cha
   // 已存在同主机连接中的标签 → 聚焦（不重复建连）；按 hostId 匹配（name 非唯一，Task 9 由 hostName 迁移）
   const existing = tabs.value.find(t => t.hostId === hostId && t.status !== 'disconnected')
   if (existing) { activeTabId.value = existing.id; return existing.id }
-  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, sessionId, channelId, status }
+  const tab: SessionTabState = { id: crypto.randomUUID(), hostId, hostName, sessionId, channelId, status, notices: [] }
   tabs.value.push(tab)
   activeTabId.value = tab.id
   return tab.id
+}
+
+// 状态条提示维护（tab.notices upsert/remove，事件驱动；新提示 = 分派器加一条映射，渲染零改动）
+function upsertNotice(tab: SessionTabState, notice: TabNotice) {
+  const i = tab.notices.findIndex(n => n.id === notice.id)
+  if (i >= 0) tab.notices[i] = notice
+  else tab.notices.push(notice)
+}
+function removeNotice(tab: SessionTabState, id: string) {
+  const i = tab.notices.findIndex(n => n.id === id)
+  if (i >= 0) tab.notices.splice(i, 1)
+}
+// 连接状态类提示整体清除（连接成功时：connecting/disconnected/reconnecting 都不再适用）
+function clearConnectionNotices(tab: SessionTabState) {
+  tab.notices = tab.notices.filter(n => !['connecting', 'disconnected', 'reconnecting'].includes(n.id))
+}
+// 恢复断连提示（重连被取消/拒绝/失败时：从 reconnecting 回到 disconnected 状态条；
+// 要求调用方先设置 tab.error，原断开原因或失败原因）
+function restoreDisconnected(tab: SessionTabState) {
+  tab.status = 'disconnected'
+  removeNotice(tab, 'reconnecting')
+  upsertNotice(tab, {
+    id: 'disconnected', level: 'error',
+    message: t('tab.disconnected', { reason: tab.error || '' }),
+    action: 'reconnect',
+  })
 }
 
 function closeTab(tabId: string) {
@@ -320,8 +346,8 @@ async function reconnectTab(tab: SessionTabState) {
   const host = hosts.value.find(h => h.id === tab.hostId)
   if (!host) {
     // 主机已删除（正常删除流程会连带关闭标签，此处为防御兜底）
-    tab.status = 'disconnected'
     tab.error = t('toast.hostNotFound')
+    restoreDisconnected(tab)
     return
   }
   let secret: string | null = null
@@ -336,7 +362,7 @@ async function reconnectTab(tab: SessionTabState) {
       const r = await promptPassword(host)
       if (r == null) {
         // 用户取消：不发连接请求，恢复断连状态（原断开原因保留）
-        tab.status = 'disconnected'
+        restoreDisconnected(tab)
         return
       }
       secret = r.secret
@@ -344,6 +370,10 @@ async function reconnectTab(tab: SessionTabState) {
       if (r.save) pendingSaveCredential.value = { host, secret: r.secret }
     }
   }
+  // 手动重连进行中：状态条提示（先移除断开提示，避免并存；成功由 Connected 事件清除，失败由 catch 恢复）
+  tab.status = 'reconnecting'
+  removeNotice(tab, 'disconnected')
+  upsertNotice(tab, { id: 'reconnecting', level: 'info', message: t('tab.reconnecting') })
   // 保存连接参数：主机密钥确认后自动重连需要（携带重连上下文，确认后更新现有标签）
   pendingConnectHost.value = { host, password: secret ?? '', reconnectTabId: tab.id }
   await doReconnectWith(host, secret, tab)
@@ -364,8 +394,9 @@ async function doReconnectWith(host: Host, secret: string | null, tab: SessionTa
       pendingConnectHost.value = null
       // 认证未通过：清理待保存凭据（密码无效不落库）
       pendingSaveCredential.value = null
-      tab.status = 'disconnected'
       tab.error = msg.includes('connect-timeout') ? t('toast.connectTimeout') : msg
+      // 重连失败：状态条恢复断开提示（含原因与重连按钮）
+      restoreDisconnected(tab)
       showToast(t('toast.connectionFailed', { err: msg }), 'error', 5000)
     }
   } finally {
@@ -414,7 +445,7 @@ async function handleHostKey(kind: string, detail: any) {
     pendingConnectHost.value = null
     pendingSaveCredential.value = null
     password.value = ''
-    if (targetTab) targetTab.status = 'disconnected'
+    if (targetTab) restoreDisconnected(targetTab)
     return
   }
   try {
@@ -432,7 +463,7 @@ async function handleHostKey(kind: string, detail: any) {
     pendingConnectHost.value = null
     pendingSaveCredential.value = null
     // 密钥保存失败：重连场景同样恢复断连状态（避免卡在 reconnecting）
-    if (targetTab) targetTab.status = 'disconnected'
+    if (targetTab) restoreDisconnected(targetTab)
   }
 }
 
@@ -582,23 +613,39 @@ onMounted(async () => {
     }
     // 会话级事件：按 session_id 路由到对应标签
     routeCoreEvent(event.payload, {
-      // onSession 完整状态机接线：Connecting / Connected / Disconnected
+      // onSession 完整状态机接线：Connecting / Connected / Disconnected（同时维护状态条 notices）
       onSession: (sid, kind, detail) => {
         const tab = tabs.value.find(t => t.sessionId === sid)
         if (!tab) return
-        if (kind === 'Connecting') { tab.status = 'connecting' }
-        else if (kind === 'Connected') { tab.status = 'connected'; tab.error = undefined }
-        else if (kind === 'Disconnected') {
+        if (kind === 'Connecting') {
+          tab.status = 'connecting'
+          upsertNotice(tab, { id: 'connecting', level: 'info', message: t('tab.connecting') })
+        } else if (kind === 'Connected') {
+          tab.status = 'connected'
+          tab.error = undefined
+          clearConnectionNotices(tab)
+        } else if (kind === 'Disconnected') {
           // 幂等：断开后跟 Close 可能重复广播 Disconnected，重复设置无副作用
           tab.status = 'disconnected'
-          tab.error = detail.reason ?? 'unknown'
+          const reason = detail.reason ?? 'unknown'
+          tab.error = reason
+          upsertNotice(tab, {
+            id: 'disconnected', level: 'error',
+            message: t('tab.disconnected', { reason }),
+            action: 'reconnect',
+          })
         }
       },
-      // 传输锁（Locked/Unlocked）按 tab 粒度：传输期间锁定该标签远程文件树
+      // 传输锁（Locked/Unlocked）按 tab 粒度：锁定远程文件树 + 状态条提示（带宽占用，命令延后）
       onTransfer: (sid, kind) => {
         const tab = tabs.value.find(t => t.sessionId === sid)
         if (!tab) return
         tab.locked = kind === 'Locked'
+        if (kind === 'Locked') {
+          upsertNotice(tab, { id: 'transfer-busy', level: 'warning', message: t('tab.transferBusy') })
+        } else {
+          removeNotice(tab, 'transfer-busy')
+        }
       },
     })
   })

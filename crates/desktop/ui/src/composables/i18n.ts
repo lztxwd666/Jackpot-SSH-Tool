@@ -118,6 +118,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.reconnecting': 'Reconnecting...',
     'tab.reconnect': 'Reconnect',
     'tab.overlayDisconnected': 'Connection lost',
+    'tab.transferBusy': 'Transfer in progress — bandwidth occupied, commands may be delayed',
 
     // 状态栏
     'status.running': 'Running',
@@ -241,6 +242,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tab.reconnecting': '正在重连...',
     'tab.reconnect': '重连',
     'tab.overlayDisconnected': '连接已断开',
+    'tab.transferBusy': '传输进行中，带宽被占满，命令可能延后',
 
     // 状态栏
     'status.running': '运行中',
