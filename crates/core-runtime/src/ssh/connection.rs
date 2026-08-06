@@ -138,6 +138,10 @@ impl SshConnection {
         self.dispatcher
             .dispatch(CoreEvent::Connection(ConnectionEvent::Authenticated));
 
+        // keepalive 配置：libssh2 默认 interval=0（禁用），不配置则 keepalive_send 恒为空操作；
+        // 间隔与 worker 的 KEEPALIVE_INTERVAL（30s）一致，want_reply 让服务端回包确认活性
+        session.set_keepalive(true, 30);
+
         self.session = Some(session);
         self.dispatcher
             .dispatch(CoreEvent::Connection(ConnectionEvent::Ready));

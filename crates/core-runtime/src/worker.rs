@@ -326,7 +326,11 @@ impl Worker {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         if self.transferring {
-            self.pending_disconnect = Some(reason.to_string());
+            // 首个断开原因优先：嵌套命令失败（如传输中排队的 ChannelWrite）不得
+            // 覆盖已挂起的原因，避免 Disconnected 事件展示误导性文案
+            if self.pending_disconnect.is_none() {
+                self.pending_disconnect = Some(reason.to_string());
+            }
             return;
         }
         self.close_all_channels_inner();

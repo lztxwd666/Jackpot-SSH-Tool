@@ -116,6 +116,7 @@ fn parse_ping_latency(output: &str) -> Option<u64> {
 fn is_valid_ping_target(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 255
+        && !s.starts_with('-') // 拒绝以 - 开头被解析为选项（如 -t）
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'))
 }
