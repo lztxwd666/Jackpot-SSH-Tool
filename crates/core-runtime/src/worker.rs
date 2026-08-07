@@ -896,10 +896,11 @@ impl Worker {
 
     /// 目录递归传输（上传）：枚举本地目录树 → 逐级创建远端目录 → 逐文件复用
     /// transfer_one_upload，进度按文件粒度上报聚合字节数
+    /// 参数顺序统一为 (remote, local)（与下载一致，remote 为目标、local 为源）
     fn transfer_tree_upload_inner(
         &mut self,
-        local_dir: &str,
         remote_dir: &str,
+        local_dir: &str,
         progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
     ) -> CoreResult<u64> {
         // 枚举本地目录树（含空目录项）

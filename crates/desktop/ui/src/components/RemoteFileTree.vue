@@ -293,7 +293,7 @@ watch(() => props.locked, (locked) => {
         :key="f.path"
         class="tree-node"
         :class="{ selected: selected === f.path }"
-        :draggable="!f.is_dir"
+        :draggable="true"
         @click="enterDir(f)"
         @dblclick="enterDir(f)"
         @dragstart="onDragStart($event, f)"
