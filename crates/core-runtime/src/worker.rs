@@ -134,6 +134,10 @@ pub(crate) enum WorkerCommand {
         path: String,
         reply: oneshot::Sender<CoreResult<()>>,
     },
+    SftpCreateFile {
+        path: String,
+        reply: oneshot::Sender<CoreResult<()>>,
+    },
     SftpRemove {
         path: String,
         is_dir: bool,
@@ -590,6 +594,15 @@ impl Worker {
         Ok(())
     }
 
+    /// 新建远程空文件（sftp.create 为 WRITE|CREAT|TRUNC：前端冲突检测保证到达
+    /// 此处的名字要么唯一（新建）要么用户已确认覆盖（截断符合覆盖语义））
+    fn sftp_create_file_inner(&mut self, path: &str) -> CoreResult<()> {
+        let _file = sftp_retry_io(&mut self.raw_channels, &self.cancel, "create file", |sftp| {
+            sftp.create(std::path::Path::new(path))
+        })?;
+        Ok(())
+    }
+
     /// 删除远程文件或目录（unlink / rmdir）
     fn sftp_remove_inner(&mut self, path: &str, is_dir: bool) -> CoreResult<()> {
         if is_dir {
@@ -868,6 +881,10 @@ impl Worker {
             }
             WorkerCommand::SftpCreateDir { path, reply } => {
                 let r = self.sftp_create_dir_inner(&path);
+                let _ = reply.send(r);
+            }
+            WorkerCommand::SftpCreateFile { path, reply } => {
+                let r = self.sftp_create_file_inner(&path);
                 let _ = reply.send(r);
             }
             WorkerCommand::SftpRemove {

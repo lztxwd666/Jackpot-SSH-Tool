@@ -1,5 +1,26 @@
 // 文件系统展示与校验工具（文件树与传输面板共用，避免各组件重复实现）
 
+import { choiceDialog } from './dialog'
+import { t } from './i18n'
+
+/**
+ * 名称冲突处理（系统文件管理器惯例）：目标名已存在时弹窗询问 自动改名/覆盖，
+ * 取消返回 null；自动改名为默认主操作（首个按钮）。两棵文件树共用
+ */
+export async function resolveNameConflict(name: string, existing: Set<string>): Promise<string | null> {
+  if (!existing.has(name)) return name
+  const choice = await choiceDialog(
+    t('prompt.overwriteMsg', { name }),
+    t('prompt.overwriteTitle'),
+    [
+      { label: t('common.autoRename'), value: 'rename' },
+      { label: t('common.overwrite'), value: 'overwrite' },
+    ],
+  )
+  if (!choice) return null
+  return choice === 'rename' ? uniqueFileName(name, existing) : name
+}
+
 /** 字节数人类可读格式化（<1KB 显示 B，GB 级小数一位；原两棵树 0K/1536000K 劣化修复） */
 export function formatFileSize(n: number): string {
   if (n >= 1024 * 1024 * 1024) return (n / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
@@ -16,4 +37,29 @@ export function formatFileSize(n: number): string {
 export function isValidNewName(name: string): boolean {
   if (!name || name === '.' || name === '..') return false
   return !/[/\\]/.test(name)
+}
+
+/**
+ * 重名冲突时生成唯一名（系统文件管理器惯例）：preferred 被占用时追加 " (n)"
+ * 于主名之后、扩展名之前，如 a.txt → a (1).txt → a (2).txt（检测已存在性递增）。
+ * 点开头文件（.env）无扩展名，直接追加后缀
+ */
+export function uniqueFileName(preferred: string, existing: Set<string>): string {
+  if (!existing.has(preferred)) return preferred
+  const dot = preferred.lastIndexOf('.')
+  const base = dot > 0 ? preferred.slice(0, dot) : preferred
+  const ext = dot > 0 ? preferred.slice(dot) : ''
+  let i = 1
+  while (existing.has(`${base} (${i})${ext}`)) i++
+  return `${base} (${i})${ext}`
+}
+
+/** 复制路径到剪贴板（WebView2 clipboard API）；失败返回 false 由调用方提示 */
+export async function copyPath(path: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(path)
+    return true
+  } catch {
+    return false
+  }
 }

@@ -7,12 +7,19 @@ import { t } from './i18n'
 
 export type DialogResult = boolean | string | null
 
+/** choice 模式的选项（label 为 UI 文案，value 为返回值） */
+export interface DialogChoice {
+  label: string
+  value: string
+}
+
 interface DialogState {
   visible: boolean
-  mode: 'confirm' | 'prompt'
+  mode: 'confirm' | 'prompt' | 'choice'
   title: string
   message: string
   defaultValue: string
+  choices: DialogChoice[]
   resolve: ((result: DialogResult) => void) | null
 }
 
@@ -22,6 +29,7 @@ export const dialogState = reactive<DialogState>({
   title: '',
   message: '',
   defaultValue: '',
+  choices: [],
   resolve: null,
 })
 
@@ -53,6 +61,23 @@ export function promptDialog(message: string, defaultValue = '', title = t('comm
     dialogState.title = title
     dialogState.message = message
     dialogState.defaultValue = defaultValue
+    dialogState.resolve = (r) => resolve(typeof r === 'string' ? r : null)
+    dialogState.visible = true
+  })
+}
+
+/** 多选项对话框（如文件重名冲突的 覆盖/自动改名/取消）：返回所选 value，取消返回 null */
+export function choiceDialog(message: string, title: string, choices: DialogChoice[]): Promise<string | null> {
+  return new Promise((resolve) => {
+    // 并发守卫：已有对话框打开时立即返回 null（取消语义）
+    if (dialogState.visible) {
+      resolve(null)
+      return
+    }
+    dialogState.mode = 'choice'
+    dialogState.title = title
+    dialogState.message = message
+    dialogState.choices = choices
     dialogState.resolve = (r) => resolve(typeof r === 'string' ? r : null)
     dialogState.visible = true
   })

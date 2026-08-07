@@ -96,6 +96,7 @@ pub fn run() {
             commands::terminal_close,
             commands::sftp_list_dir,
             commands::sftp_create_dir,
+            commands::sftp_create_file,
             commands::sftp_delete,
             commands::sftp_rename,
             commands::sftp_download_file,

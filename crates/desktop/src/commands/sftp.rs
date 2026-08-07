@@ -51,6 +51,21 @@ pub async fn sftp_create_dir(
         .map_err(|e| e.to_string())
 }
 
+/// 新建远程空文件（重名冲突由前端检测处理）
+#[tauri::command]
+pub async fn sftp_create_file(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    path: String,
+) -> Result<(), String> {
+    let channel = get_sftp_channel(&state, &session_id).await?;
+
+    tokio::task::spawn_blocking(move || channel.sftp_create_file(&path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
 /// 删除远程文件或目录
 #[tauri::command]
 pub async fn sftp_delete(

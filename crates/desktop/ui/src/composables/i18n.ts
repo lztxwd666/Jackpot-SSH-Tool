@@ -42,8 +42,12 @@ const messages: Record<Locale, Record<string, string>> = {
     'common.save': 'Save',
     'common.delete': 'Delete',
     'common.rename': 'Rename',
+    'common.copyPath': 'Copy Path',
     'common.ping': 'Ping',
     'common.newFolder': 'New Folder',
+    'common.newFile': 'New File',
+    'common.overwrite': 'Overwrite',
+    'common.autoRename': 'Auto Rename',
     'common.download': 'Download',
     'common.upload': 'Upload to Remote',
 
@@ -112,6 +116,9 @@ const messages: Record<Locale, Record<string, string>> = {
     // 输入对话框
     'prompt.folderName': 'Folder name:',
     'prompt.newName': 'New name:',
+    'prompt.fileName': 'File name:',
+    'prompt.overwriteTitle': 'File Exists',
+    'prompt.overwriteMsg': '"{name}" already exists.',
 
     // 标签页
     'tab.disconnect': 'Disconnect',
@@ -153,6 +160,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.systemFileDrop': 'Please use the local file tree to upload files',
     'toast.hostNotFound': 'Host not found',
     'toast.invalidName': 'Invalid name: cannot contain / \\ or ..',
+    'toast.copied': 'Path copied',
+    'toast.copyFailed': 'Copy failed',
   },
   zh: {
     // 通用按钮
@@ -169,8 +178,12 @@ const messages: Record<Locale, Record<string, string>> = {
     'common.save': '保存',
     'common.delete': '删除',
     'common.rename': '重命名',
+    'common.copyPath': '复制路径',
     'common.ping': 'Ping',
     'common.newFolder': '新建文件夹',
+    'common.newFile': '新建文件',
+    'common.overwrite': '覆盖',
+    'common.autoRename': '自动改名',
     'common.download': '下载',
     'common.upload': '上传到远程',
 
@@ -239,6 +252,9 @@ const messages: Record<Locale, Record<string, string>> = {
     // 输入对话框
     'prompt.folderName': '文件夹名称：',
     'prompt.newName': '新名称：',
+    'prompt.fileName': '文件名：',
+    'prompt.overwriteTitle': '文件已存在',
+    'prompt.overwriteMsg': '"{name}" 已存在。',
 
     // 标签页
     'tab.disconnect': '断开连接',
@@ -280,6 +296,8 @@ const messages: Record<Locale, Record<string, string>> = {
     'toast.systemFileDrop': '请使用左侧本地文件树上传文件',
     'toast.hostNotFound': '主机不存在',
     'toast.invalidName': '名称无效：不能包含 / \\ 或 ..',
+    'toast.copied': '路径已复制',
+    'toast.copyFailed': '复制失败',
   },
 }
 

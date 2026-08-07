@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
-import { formatFileSize, isValidNewName } from '../composables/fs'
+import { formatFileSize, isValidNewName, resolveNameConflict, copyPath } from '../composables/fs'
 import { clampFloatPos } from '../composables/pos'
+import FileTreeHeader from './FileTreeHeader.vue'
 import { t } from '../composables/i18n'
 
 // 自定义 MIME 类型：dragover 期间 getData() 不可读，只能读 types
@@ -32,7 +33,7 @@ const selected = ref('')
 const loading = ref(false)
 const dragOver = ref(false)  // 拖拽悬停高亮
 
-// 右键菜单状态
+// 右键菜单状态（文件/目录项）
 const showMenu = ref(false)
 const menuX = ref(0)
 const menuY = ref(0)
@@ -42,6 +43,21 @@ const menuStyle = computed(() => {
   const p = clampFloatPos(menuX.value, menuY.value, 140, 140)
   return { left: p.x + 'px', top: p.y + 'px' }
 })
+
+// 空白区域右键菜单（新建文件/新建文件夹/刷新，VSCode 资源管理器对齐）
+const blankMenu = ref<{ x: number; y: number } | null>(null)
+const blankMenuStyle = computed(() => {
+  if (!blankMenu.value) return { left: '0px', top: '0px' }
+  const p = clampFloatPos(blankMenu.value.x, blankMenu.value.y, 140, 110)
+  return { left: p.x + 'px', top: p.y + 'px' }
+})
+function onBlankContextMenu(e: MouseEvent) {
+  // 仅空白区域（未命中文件节点）显示新建菜单
+  if ((e.target as HTMLElement).closest('.tree-node')) return
+  e.preventDefault()
+  blankMenu.value = { x: e.clientX, y: e.clientY }
+}
+function closeBlankMenu() { blankMenu.value = null }
 
 function parentPath(p: string): string {
   const stripped = p.replace(/\\$/, '')
@@ -135,15 +151,38 @@ function doUploadToRemote() {
 
 async function doNewFolder() {
   closeMenu()
+  closeBlankMenu()
   const name = await promptDialog(t('prompt.folderName'))
   if (!name) return
   // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
   if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
-  const path = currentPath.value.replace(/\\$/, '') + '\\' + name
+  // 重名冲突：询问自动改名/覆盖（系统文件管理器惯例）
+  const final = await resolveNameConflict(name, new Set(files.value.map(f => f.name)))
+  if (!final) return
+  const path = currentPath.value.replace(/\\$/, '') + '\\' + final
   try {
     await invoke('create_local_dir', { path })
     loadDir(currentPath.value)
-    showToast(t('toast.created', { name }), 'success')
+    showToast(t('toast.created', { name: final }), 'success')
+  } catch (e) { showToast(t('toast.createFailed', { err: String(e) }), 'error', 5000) }
+}
+
+async function doNewFile() {
+  closeMenu()
+  closeBlankMenu()
+  const name = await promptDialog(t('prompt.fileName'))
+  if (!name) return
+  // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
+  if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
+  // 重名冲突：询问自动改名/覆盖（系统文件管理器惯例）
+  const final = await resolveNameConflict(name, new Set(files.value.map(f => f.name)))
+  if (!final) return
+  const path = currentPath.value.replace(/\\$/, '') + '\\' + final
+  try {
+    // 空内容创建（write_local_file 自动建父目录，此处父目录即当前目录）
+    await invoke('write_local_file', { path, data: [] })
+    loadDir(currentPath.value)
+    showToast(t('toast.created', { name: final }), 'success')
   } catch (e) { showToast(t('toast.createFailed', { err: String(e) }), 'error', 5000) }
 }
 
@@ -155,12 +194,24 @@ async function doRename() {
   if (!newName || newName === target.name) return
   // 校验名称：拒绝路径分隔符与 ..（防移动到目录外）
   if (!isValidNewName(newName)) { showToast(t('toast.invalidName'), 'error', 4000); return }
+  // 重名冲突（排除自身）：与新建一致的处理
+  const others = new Set(files.value.filter(f => f.name !== target.name).map(f => f.name))
+  const final = await resolveNameConflict(newName, others)
+  if (!final) return
   const parent = currentPath.value.replace(/\\$/, '')
   try {
-    await invoke('rename_local_file', { oldPath: target.path, newPath: parent + '\\' + newName })
+    await invoke('rename_local_file', { oldPath: target.path, newPath: parent + '\\' + final })
     loadDir(currentPath.value)
-    showToast(t('toast.renamed', { name: newName }), 'success')
+    showToast(t('toast.renamed', { name: final }), 'success')
   } catch (e) { showToast(t('toast.renameFailed', { err: String(e) }), 'error', 5000) }
+}
+
+// 复制完整路径到剪贴板（运维常用，VSCode 同款）
+async function doCopyPath() {
+  if (!menuTarget.value) return
+  closeMenu()
+  const ok = await copyPath(menuTarget.value.path)
+  showToast(ok ? t('toast.copied') : t('toast.copyFailed'), ok ? 'success' : 'error')
 }
 
 async function doDelete() {
@@ -176,6 +227,11 @@ async function doDelete() {
   } catch (e) { showToast(t('toast.deleteFailed', { err: String(e) }), 'error', 5000) }
 }
 
+function refresh() {
+  closeBlankMenu()
+  loadDir(currentPath.value)
+}
+
 onMounted(() => loadDir(''))
 
 // 外部刷新令牌（下载完成后自动刷新当前目录）
@@ -185,8 +241,9 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 <template>
   <div class="file-tree" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragover="onDragover"
     @dragleave="onDragLeave" @click="closeMenu">
-    <div class="tree-header">{{ t('tree.localTitle') }}</div>
-    <div class="tree-body">
+    <!-- VSCode EXPLORER 样式标题栏：标题居左，悬停显示新建文件/文件夹/刷新 -->
+    <FileTreeHeader :title="t('tree.localTitle')" @new-file="doNewFile" @new-folder="doNewFolder" @refresh="refresh" />
+    <div class="tree-body" @contextmenu="onBlankContextMenu">
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="currentPath && parentPath(currentPath) !== currentPath" class="tree-node up-node" @click="goUp">
         <!-- 文件夹图标（琥珀色，SVG 无 emoji）：父目录 -->
@@ -204,13 +261,20 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
       </div>
     </div>
 
-    <!-- 右键菜单（clamp 防溢出窗口边缘） -->
+    <!-- 右键菜单（文件/目录项，clamp 防溢出窗口边缘） -->
     <div v-if="showMenu" class="context-menu" :style="menuStyle">
       <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doUploadToRemote">{{ t('common.upload') }}
       </div>
       <div class="menu-item" @click="doNewFolder">{{ t('common.newFolder') }}</div>
       <div v-if="menuTarget" class="menu-item" @click="doRename">{{ t('common.rename') }}</div>
+      <div v-if="menuTarget" class="menu-item" @click="doCopyPath">{{ t('common.copyPath') }}</div>
       <div v-if="menuTarget" class="menu-item" @click="doDelete">{{ t('common.delete') }}</div>
+    </div>
+    <!-- 空白区域右键菜单：新建文件/新建文件夹/刷新（VSCode 资源管理器对齐） -->
+    <div v-if="blankMenu" class="context-menu" :style="blankMenuStyle" @click="closeBlankMenu">
+      <div class="menu-item" @click="doNewFile">{{ t('common.newFile') }}</div>
+      <div class="menu-item" @click="doNewFolder">{{ t('common.newFolder') }}</div>
+      <div class="menu-item" @click="refresh">{{ t('common.refresh') }}</div>
     </div>
   </div>
 </template>

@@ -32,6 +32,18 @@ impl Channel {
         )
     }
 
+    /// 新建远程空文件（幂等：已存在保持原内容）
+    pub fn sftp_create_file(&self, path: &str) -> CoreResult<()> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.worker.call(
+            WorkerCommand::SftpCreateFile {
+                path: path.to_string(),
+                reply: reply_tx,
+            },
+            reply_rx,
+        )
+    }
+
     /// 删除远程文件
     pub fn sftp_remove_file(&self, path: &str) -> CoreResult<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();

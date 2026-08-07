@@ -864,7 +864,7 @@ onBeforeUnmount(() => {
       @cancel="cancelPanel"
     />
 
-    <!-- 全局确认/输入对话框（带确认 + 取消，可反悔） -->
+    <!-- 全局确认/输入/多选项对话框（可反悔） -->
     <div v-if="dialogState.visible" class="modal-overlay" @click.self="closeDialog(dialogState.mode === 'prompt' ? null : false)">
       <div class="modal">
         <h3>{{ dialogState.title }}</h3>
@@ -876,6 +876,17 @@ onBeforeUnmount(() => {
             <button type="button" class="btn" @click="closeDialog(null)">{{ t('common.cancel') }}</button>
           </div>
         </form>
+        <!-- choice 模式：多选项按钮（首个为主操作，如重名冲突的"自动改名"） -->
+        <div v-else-if="dialogState.mode === 'choice'" class="modal-actions">
+          <button
+            v-for="(c, i) in dialogState.choices"
+            :key="c.value"
+            class="btn"
+            :class="{ 'btn-primary': i === 0 }"
+            @click="closeDialog(c.value)"
+          >{{ c.label }}</button>
+          <button class="btn" @click="closeDialog(null)">{{ t('common.cancel') }}</button>
+        </div>
         <div v-else class="modal-actions">
           <button class="btn btn-primary" @click="closeDialog(true)">{{ t('common.ok') }}</button>
           <button class="btn" @click="closeDialog(false)">{{ t('common.cancel') }}</button>

@@ -152,6 +152,18 @@ Vue 3 Composition API (`<script setup>`). `App.vue` hosts the tab workspace (wra
 - A fix that forks an existing primitive (e.g. a second retry loop beside `io_retry`) creates two truths to maintain; prefer one well-placed primitive used by all callers
 - Balance is the goal: a structural fix beats a patch; a few lines in the right place beat a framework
 
+## New File Guidelines
+
+- **Prefer extending existing modules over creating new files**: a new file is a new home for logic; before creating one, verify the logic does not belong in an existing module (Fix Quality Bar: shared logic belongs in a shared place). Creating a file is a structural decision, not an organizational convenience
+- **One file = one cohesive responsibility**, named by responsibility (snake_case, e.g. `retry.rs`, `fs.ts`) — never file-per-feature or file-per-component speculation
+- **Every new file opens with a `//!` module doc** (Chinese) stating the file's responsibility and, where non-obvious, the design decision behind it
+- **New utility/composable functions must have ≥2 callers or be part of a clear abstraction**; a single-caller helper stays private in the caller's module
+- **Match the crate's existing idiom**: same comment density, same naming, same error handling (thiserror/`CoreError`), same logging (`tracing`), same CSS variable conventions for frontend
+- **New public types implement `Debug + Clone + Serialize + Deserialize`** where applicable (events/IDs per Key Conventions); secrets must never be serializable (see `AuthMethod`)
+- **Key Conventions apply unchanged to new files**: Chinese comments, no emojis, no `=`/`-` comment separators; frontend user-visible strings via `t()` with en/zh pairs
+- **UI behavior follows established product conventions** (VSCode/OS file manager patterns) — do not invent novel interaction patterns where a mainstream one exists
+- **Verify before reporting**: new code must pass build + test + clippy (`--all-targets -- -D warnings`) and frontend type-check + build
+
 ## UI Language Rules
 
 - **Language division of labor**: UI/UX strings are English (default) or Chinese (user-selectable) for broad user reach; the developer's working language is Chinese — code comments, commit messages, and internal documentation stay in Chinese per project convention
