@@ -24,7 +24,7 @@ let disposed = false
 // （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
 let ended = false
 
-// 终端右键菜单（MobaXterm 风格：复制/粘贴/清屏，只做我们有能力实现的功能）
+// 终端右键菜单（MobaXterm 风格：复制/粘贴/清屏）
 // 复制项在无选中文本时禁用（xterm selection 状态跟踪）
 const termMenu = ref<{ x: number; y: number } | null>(null)
 const hasSelection = ref(false)
@@ -92,7 +92,7 @@ onMounted(async () => {
   term.onResize(({ cols, rows }) => {
     if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
     resizeTimer = window.setTimeout(() => {
-      invoke('terminal_resize', { channelId: props.channelId, cols, rows }).catch(() => {})
+      invoke('terminal_resize', { channelId: props.channelId, cols, rows }).catch(() => { })
     }, 150)
   })
 
@@ -107,7 +107,7 @@ onMounted(async () => {
       channelId: props.channelId,
       cols: term.cols,
       rows: term.rows,
-    }).catch(() => {})
+    }).catch(() => { })
   }
 
   unlisten = await listen<any>('core-event', (event) => {
@@ -130,7 +130,7 @@ onMounted(async () => {
           term.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n')
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   })
 
   // await listen 期间组件可能已卸载（旧通道被 :key 重建）：解绑监听器并中止初始化
@@ -143,7 +143,7 @@ onMounted(async () => {
   term.onData((data) => {
     // 会话已结束（exit 后通道关闭）：丢弃输入，不再发 IPC
     if (ended) return
-    invoke('terminal_send_input', { channelId: props.channelId, data }).catch(() => {})
+    invoke('terminal_send_input', { channelId: props.channelId, data }).catch(() => { })
   })
 
   observer = new ResizeObserver(() => {
@@ -183,20 +183,40 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
 }
+
 .terminal-container :deep(.xterm) {
   height: 100%;
 }
+
 .terminal-container :deep(.xterm-viewport) {
   overflow-y: auto;
 }
 
 /* 终端右键菜单（与文件树/主机栏 context-menu 同风格） */
 .context-menu {
-  position: fixed; background: var(--color-background); border: 1px solid var(--color-border);
-  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000; min-width: 120px;
+  position: fixed;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  min-width: 120px;
 }
-.menu-item { padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
-.menu-item:hover { background: var(--color-background-mute); }
+
+.menu-item {
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.menu-item:hover {
+  background: var(--color-background-mute);
+}
+
 /* 复制项无选中文本时禁用 */
-.menu-item.disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+.menu-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
 </style>

@@ -173,7 +173,6 @@ pub enum TransferEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatcher::EventDispatcher;
 
     #[test]
     fn test_event_serialization() {
@@ -183,18 +182,6 @@ mod tests {
         assert!(matches!(
             parsed,
             CoreEvent::Application(ApplicationEvent::Started)
-        ));
-    }
-
-    #[test]
-    fn test_dispatcher_send_receive() {
-        let dispatcher = crate::dispatcher::ChannelDispatcher::new(16);
-        let mut rx = dispatcher.subscribe();
-        dispatcher.dispatch(CoreEvent::Application(ApplicationEvent::Ready));
-        let received = rx.try_recv().unwrap();
-        assert!(matches!(
-            received,
-            CoreEvent::Application(ApplicationEvent::Ready)
         ));
     }
 

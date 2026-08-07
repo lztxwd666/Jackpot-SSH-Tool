@@ -50,6 +50,8 @@ desktop ──→ core-runtime ──→ core-event
 
 Full spec at `docs/core_idea_zh/` (Chinese) and `docs/core_idea_en/` (English). Read `01_Architecture` and `09_Engineering_Guidelines` before significant changes.
 
+**Strict one-way dependencies apply at every level, not just crates**: module-level cycles within a crate are forbidden. A module must not import from a module that (transitively) imports it — in Rust, `use` compiles either way, so cycles are silent design debt. When extracting shared logic, place shared raw types in the module that owns them (e.g. `ChannelInner` lives in `worker`, `open_shell_raw` with it; `channel` only imports `worker`, never the reverse). Frontend composables follow the same rule (`fs` → `dialog` → `i18n` is fine; `dialog` → `fs` would not be). After dependency-affecting changes run `python scripts/check_rust_deps.py` (Rust module graph) and confirm the frontend import graph stays acyclic.
+
 ### Crate Map
 
 | Crate          | Dir                    | Purpose                                                                                                                                                                             | Key Types                                                                                                                                                                                                                                                                |
@@ -133,6 +135,7 @@ Vue 3 Composition API (`<script setup>`). `App.vue` hosts the tab workspace (wra
 ## Key Conventions
 
 - All code comments in **Chinese** (中文)
+- **Comments contain substantive content only**: state facts or rationale about the code; no conversational or colloquial phrasing (e.g. "只做我们有能力实现的功能"), no filler words — if a comment cannot be written substantively, omit it
 - Avoid `=` or `-` as comment separators
 - Technical terms (CPU, RAM, SSH, PTY, SFTP, etc.) remain in English
 - `unsafe` is allowed but minimized: some operations (raw FFI, custom layouts) are impossible without it — that is a Rust limitation, not an error. Every `unsafe` block MUST be annotated with a `// SAFETY:` comment explaining the invariants that make it sound. Prefer safe wrappers that encapsulate `unsafe` behind a narrow, well-tested interface. Zero `unsafe` remains the goal for new code when a safe alternative exists

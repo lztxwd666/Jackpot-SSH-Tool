@@ -4,12 +4,11 @@
 
 #![allow(dead_code)]
 
-use crate::channel::{self, ChannelInner};
 use crate::ssh::SshConnection;
 use crate::ssh::io_retry; // 统一的 EAGAIN 重试原语（定义在 ssh::retry，供全部 ssh2 操作共用）
 use core_common::{
     ChannelId, ChannelType, ConnectionConfig, CoreError, CoreResult, FileEntry,
-    KnownHostsProvider, SessionId, SessionState,
+    KnownHostsProvider, PtySize, SessionId, SessionState,
 };
 use core_event::EventDispatcher;
 use core_event::event::{
@@ -222,6 +221,21 @@ pub(crate) fn run_loop(
         std::thread::sleep(std::time::Duration::from_millis(IDLE_INTERVAL_MS));
     }
 }
+
+/// 内部通道类型（worker 通道注册表条目；归属 worker 而非 channel 模块，
+/// 保持 channel → worker 单向依赖，避免模块级循环依赖）
+enum ChannelInner {
+    Session(ssh2::Channel),
+    Sftp(ssh2::Sftp),
+}
+
+/// PTY 终端模式 opcode 常量（RFC 4254 §8 定义；ICANON=51、ISIG=50，非 2/3）
+const ECHO: u8 = 53;
+const ICANON: u8 = 51;
+const ISIG: u8 = 50;
+const ICRNL: u8 = 36;
+const ONLCR: u8 = 72;
+const OPOST: u8 = 70;
 
 /// worker 内部状态：全部 ssh2 相关状态移入此处（无锁，单线程独占）
 struct Worker {
@@ -446,12 +460,11 @@ impl Worker {
         let dispatcher = self.dispatcher.clone();
         let inner = match ctype {
             ChannelType::Shell => {
-                let ch = channel::open_shell_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
+                let ch = open_shell_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
                 ChannelInner::Session(ch)
             }
             ChannelType::Sftp => {
-                let sftp =
-                    channel::open_sftp_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
+                let sftp = open_sftp_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
                 ChannelInner::Sftp(sftp)
             }
         };
@@ -1025,6 +1038,76 @@ where
         }
     }
     Ok(())
+}
+
+/// 创建 Shell 通道的原始 ssh2::Channel（worker 内调用，不注册到外部队列）
+fn open_shell_raw(
+    ssh_session: &ssh2::Session,
+    session_id: SessionId,
+    channel_id: ChannelId,
+    dispatcher: Arc<dyn EventDispatcher>,
+) -> CoreResult<ssh2::Channel> {
+    dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
+        session_id,
+        channel_id,
+        channel_type: ChannelType::Shell,
+    }));
+
+    let mut inner_ch = ssh_session.channel_session().map_err(|e| {
+        CoreError::Internal(format!("open channel session failed: {e}"))
+    })?;
+
+    // 设置标准 PTY 终端模式（与 OpenSSH 行为对齐）
+    let mut modes = ssh2::PtyModes::new();
+    modes.set_boolean(ECHO, true);
+    modes.set_boolean(ICANON, true);
+    modes.set_boolean(ISIG, true);
+    modes.set_boolean(ICRNL, true);
+    modes.set_boolean(ONLCR, true);
+    modes.set_boolean(OPOST, true);
+
+    let pty = PtySize::default();
+    inner_ch
+        .request_pty(
+            "xterm-256color",
+            Some(modes),
+            Some((pty.cols, pty.rows, pty.width_px, pty.height_px)),
+        )
+        .map_err(|e| CoreError::Internal(format!("request pty failed: {e}")))?;
+
+    inner_ch
+        .shell()
+        .map_err(|e| CoreError::Internal(format!("start shell failed: {e}")))?;
+
+    // 切换到非阻塞模式
+    ssh_session.set_blocking(false);
+
+    tracing::info!(%channel_id, %session_id, "shell channel opened (nonblocking)");
+    Ok(inner_ch)
+}
+
+/// 创建 SFTP 通道的原始 ssh2::Sftp（worker 内调用，不注册到外部队列）
+fn open_sftp_raw(
+    ssh_session: &ssh2::Session,
+    session_id: SessionId,
+    channel_id: ChannelId,
+    dispatcher: Arc<dyn EventDispatcher>,
+) -> CoreResult<ssh2::Sftp> {
+    dispatcher.dispatch(CoreEvent::Channel(ChannelEvent::Opening {
+        session_id,
+        channel_id,
+        channel_type: ChannelType::Sftp,
+    }));
+
+    // SFTP 初始化需要在阻塞模式下完成；失败时同样恢复非阻塞
+    // （阻塞模式遗留会使 io_retry 的非阻塞假设失效，worker 可能被单次操作卡住）
+    ssh_session.set_blocking(true);
+    let result = ssh_session.sftp();
+    ssh_session.set_blocking(false);
+    let sftp = result.map_err(|e| CoreError::Internal(format!("open sftp failed: {e}")))?;
+
+    tracing::info!(%channel_id, %session_id, "sftp channel opened");
+    Ok(sftp)
 }
 
 /// 对 sftp 通道执行一次操作并统一 EAGAIN 重试（io_retry）

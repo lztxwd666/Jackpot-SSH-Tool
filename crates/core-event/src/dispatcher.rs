@@ -45,3 +45,22 @@ impl EventDispatcher for ChannelDispatcher {
         let _ = self.sender.send(event);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::{ApplicationEvent, CoreEvent};
+
+    // 收发测试放在本模块：保持 event.rs 不依赖 dispatcher（模块级单向依赖约束）
+    #[test]
+    fn test_dispatcher_send_receive() {
+        let dispatcher = ChannelDispatcher::new(16);
+        let mut rx = dispatcher.subscribe();
+        dispatcher.dispatch(CoreEvent::Application(ApplicationEvent::Ready));
+        let received = rx.try_recv().unwrap();
+        assert!(matches!(
+            received,
+            CoreEvent::Application(ApplicationEvent::Ready)
+        ));
+    }
+}
