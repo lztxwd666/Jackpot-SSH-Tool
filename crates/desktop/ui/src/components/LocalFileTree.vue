@@ -102,6 +102,12 @@ function onDragStart(e: DragEvent, file: FileNode) {
 }
 
 // 远程文件拖入（下载到本地）：无条件接受悬停，drop 时校验数据
+// dragenter 与 dragover 都必须 preventDefault 才允许放置：只处理 dragover 时，
+// 鼠标在子元素间移动会反复触发 dragenter，光标在"允许/禁止"间闪烁
+function onDragenter(e: DragEvent) {
+  e.preventDefault()
+  e.dataTransfer!.dropEffect = 'copy'
+}
 function onDragover(e: DragEvent) {
   e.preventDefault()
   e.dataTransfer!.dropEffect = 'copy'
@@ -271,8 +277,8 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 </script>
 
 <template>
-  <div class="file-tree" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragover="onDragover"
-    @dragleave="onDragLeave" @click="closeMenu">
+  <div class="file-tree" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragenter="onDragenter"
+    @dragover="onDragover" @dragleave="onDragLeave" @click="closeMenu">
     <!-- VSCode EXPLORER 样式标题栏：标题居左，悬停显示新建文件/文件夹/刷新 -->
     <FileTreeHeader :title="t('tree.localTitle')" @new-file="doNewFile" @new-folder="doNewFolder" @refresh="refresh" />
     <div class="tree-body" @contextmenu="onBlankContextMenu">

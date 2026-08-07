@@ -1122,39 +1122,40 @@ impl Worker {
                 local,
                 progress,
                 reply,
-            } => {
-                // 传输命令在传输中再次到达：拒绝（避免嵌套传输）
-                if self.transferring {
-                    let _ = reply.send(Err(CoreError::Internal(
-                        "transfer already in progress".into(),
-                    )));
-                    return !self.closed;
-                }
-                let r = self.handle_transfer_inner(kind, &remote, &local, progress);
-                // 传输中到达的断开/关闭在传输栈弹出后冲刷（延迟释放连接，防 use-after-free）
-                self.flush_pending();
-                let _ = reply.send(r);
-            }
+            } => self.run_transfer_cmd(
+                reply,
+                move |w| w.handle_transfer_inner(kind, &remote, &local, progress),
+            ),
             WorkerCommand::SftpTransferTree {
                 kind,
                 remote,
                 local,
                 progress,
                 reply,
-            } => {
-                // 目录传输与单文件传输互斥（同一 transferring 标志，拒绝嵌套）
-                if self.transferring {
-                    let _ = reply.send(Err(CoreError::Internal(
-                        "transfer already in progress".into(),
-                    )));
-                    return !self.closed;
-                }
-                let r = self.handle_transfer_tree_inner(kind, &remote, &local, progress);
-                self.flush_pending();
-                let _ = reply.send(r);
-            }
+            } => self.run_transfer_cmd(
+                reply,
+                move |w| w.handle_transfer_tree_inner(kind, &remote, &local, progress),
+            ),
         }
         !self.closed
+    }
+
+    /// 传输命令公共处理（单文件/目录共用）：拒绝嵌套传输 → 执行 → 冲刷挂起的
+    /// 断开/关闭（传输栈弹出后延迟释放连接，防 use-after-free）→ 回执
+    fn run_transfer_cmd(
+        &mut self,
+        reply: oneshot::Sender<CoreResult<u64>>,
+        run: impl FnOnce(&mut Self) -> CoreResult<u64>,
+    ) {
+        if self.transferring {
+            let _ = reply.send(Err(CoreError::Internal(
+                "transfer already in progress".into(),
+            )));
+            return;
+        }
+        let r = run(self);
+        self.flush_pending();
+        let _ = reply.send(r);
     }
 
     /// 空闲工作：keepalive 发送与 shell 通道非阻塞轮询读
