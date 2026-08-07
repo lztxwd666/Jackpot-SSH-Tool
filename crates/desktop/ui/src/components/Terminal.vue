@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { showToast } from '../composables/dialog'
+import { clampFloatPos } from '../composables/pos'
+import { useClickOutsideClose } from '../composables/menu'
+import { t } from '../composables/i18n'
 import 'xterm/css/xterm.css'
 
 const props = defineProps<{ channelId: string }>()
@@ -20,6 +24,51 @@ let disposed = false
 // （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
 let ended = false
 
+// 终端右键菜单（MobaXterm 风格：复制/粘贴/清屏，只做我们有能力实现的功能）
+// 复制项在无选中文本时禁用（xterm selection 状态跟踪）
+const termMenu = ref<{ x: number; y: number } | null>(null)
+const hasSelection = ref(false)
+const termMenuStyle = computed(() => {
+  if (!termMenu.value) return { left: '0px', top: '0px' }
+  const p = clampFloatPos(termMenu.value.x, termMenu.value.y, 140, 100)
+  return { left: p.x + 'px', top: p.y + 'px' }
+})
+function onTermContextMenu(e: MouseEvent) {
+  // 阻止浏览器默认菜单（xterm 内部隐藏 textarea 会被全局抑制放行，必须在此拦截）
+  e.preventDefault()
+  termMenu.value = { x: e.clientX, y: e.clientY }
+}
+function closeTermMenu() { termMenu.value = null }
+useClickOutsideClose(termMenu, closeTermMenu)
+
+// 复制选中文本（xterm 剪贴板惯例：复制成功无提示，失败提示）
+async function doCopy() {
+  if (!hasSelection.value) return
+  closeTermMenu()
+  try {
+    await navigator.clipboard.writeText(term.getSelection())
+  } catch {
+    showToast(t('term.copyFailed'), 'error')
+  }
+}
+
+// 粘贴（xterm paste 模拟键盘输入，经 onData 发送到远端）
+async function doPaste() {
+  closeTermMenu()
+  try {
+    const text = await navigator.clipboard.readText()
+    term.paste(text)
+  } catch {
+    showToast(t('term.pasteFailed'), 'error')
+  }
+}
+
+// 清屏（本地清除终端显示，不动远端会话）
+function doClear() {
+  closeTermMenu()
+  term.clear()
+}
+
 onMounted(async () => {
   term = new Terminal({
     cursorBlink: true,
@@ -32,6 +81,11 @@ onMounted(async () => {
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(terminalRef.value!)
+
+  // 选中状态跟踪（右键菜单"复制"项禁用态）
+  term.onSelectionChange(() => {
+    hasSelection.value = term.hasSelection()
+  })
 
   // onResize 必须在 fit() 之前注册，否则初始 resize 事件会丢失
   // resize 防抖：连续调整窗口时避免高频 IPC 调用
@@ -114,7 +168,14 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="terminalRef" class="terminal-container"></div>
+  <!-- 终端右键自定义菜单（MobaXterm 风格）；preventDefault 拦截浏览器默认菜单 -->
+  <div ref="terminalRef" class="terminal-container" @contextmenu="onTermContextMenu">
+    <div v-if="termMenu" class="context-menu" :style="termMenuStyle">
+      <div class="menu-item" :class="{ disabled: !hasSelection }" @click="doCopy">{{ t('term.copy') }}</div>
+      <div class="menu-item" @click="doPaste">{{ t('term.paste') }}</div>
+      <div class="menu-item" @click="doClear">{{ t('term.clear') }}</div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -128,4 +189,14 @@ onBeforeUnmount(() => {
 .terminal-container :deep(.xterm-viewport) {
   overflow-y: auto;
 }
+
+/* 终端右键菜单（与文件树/主机栏 context-menu 同风格） */
+.context-menu {
+  position: fixed; background: var(--color-background); border: 1px solid var(--color-border);
+  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000; min-width: 120px;
+}
+.menu-item { padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
+.menu-item:hover { background: var(--color-background-mute); }
+/* 复制项无选中文本时禁用 */
+.menu-item.disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 </style>

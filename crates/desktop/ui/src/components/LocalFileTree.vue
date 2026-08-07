@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
 import { formatFileSize, isValidNewName, resolveNameConflict, copyPath } from '../composables/fs'
 import { clampFloatPos } from '../composables/pos'
+import { useClickOutsideClose } from '../composables/menu'
 import FileTreeHeader from './FileTreeHeader.vue'
 import { t } from '../composables/i18n'
 
@@ -58,6 +59,10 @@ function onBlankContextMenu(e: MouseEvent) {
   blankMenu.value = { x: e.clientX, y: e.clientY }
 }
 function closeBlankMenu() { blankMenu.value = null }
+
+// 菜单打开时注册全局点击关闭（点击菜单外任意处消除菜单，标准交互）
+useClickOutsideClose(showMenu, closeMenu)
+useClickOutsideClose(blankMenu, closeBlankMenu)
 
 function parentPath(p: string): string {
   const stripped = p.replace(/\\$/, '')
@@ -149,25 +154,29 @@ function doUploadToRemote() {
   emit('upload-request', menuTarget.value.path)
 }
 
-async function doNewFolder() {
+// 新建文件夹（dir 缺省为当前目录；右键文件夹场景传该文件夹路径，在该文件夹下创建）
+async function doNewFolder(dir?: string) {
   closeMenu()
   closeBlankMenu()
   const name = await promptDialog(t('prompt.folderName'))
   if (!name) return
   // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
   if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
-  // 重名冲突：询问自动改名/覆盖（系统文件管理器惯例）
-  const final = await resolveNameConflict(name, new Set(files.value.map(f => f.name)))
+  // 重名冲突：询问自动改名/覆盖（系统文件管理器惯例）；冲突判定基于目标目录的现有条目
+  const base = dir ?? currentPath.value
+  const existing = dir ? await listNamesIn(base) : new Set(files.value.map(f => f.name))
+  const final = await resolveNameConflict(name, existing)
   if (!final) return
-  const path = currentPath.value.replace(/\\$/, '') + '\\' + final
+  const path = base.replace(/\\$/, '') + '\\' + final
   try {
     await invoke('create_local_dir', { path })
-    loadDir(currentPath.value)
+    loadDir(base)
     showToast(t('toast.created', { name: final }), 'success')
   } catch (e) { showToast(t('toast.createFailed', { err: String(e) }), 'error', 5000) }
 }
 
-async function doNewFile() {
+// 新建文件（dir 缺省为当前目录；右键文件夹场景传该文件夹路径）
+async function doNewFile(dir?: string) {
   closeMenu()
   closeBlankMenu()
   const name = await promptDialog(t('prompt.fileName'))
@@ -175,15 +184,27 @@ async function doNewFile() {
   // 校验名称：拒绝路径分隔符与 ..（防建到目录外）
   if (!isValidNewName(name)) { showToast(t('toast.invalidName'), 'error', 4000); return }
   // 重名冲突：询问自动改名/覆盖（系统文件管理器惯例）
-  const final = await resolveNameConflict(name, new Set(files.value.map(f => f.name)))
+  const base = dir ?? currentPath.value
+  const existing = dir ? await listNamesIn(base) : new Set(files.value.map(f => f.name))
+  const final = await resolveNameConflict(name, existing)
   if (!final) return
-  const path = currentPath.value.replace(/\\$/, '') + '\\' + final
+  const path = base.replace(/\\$/, '') + '\\' + final
   try {
-    // 空内容创建（write_local_file 自动建父目录，此处父目录即当前目录）
+    // 空内容创建（write_local_file 自动建父目录，此处父目录即创建目录）
     await invoke('write_local_file', { path, data: [] })
-    loadDir(currentPath.value)
+    loadDir(base)
     showToast(t('toast.created', { name: final }), 'success')
   } catch (e) { showToast(t('toast.createFailed', { err: String(e) }), 'error', 5000) }
+}
+
+// 列出指定目录的名字（用于子文件夹内新建的冲突判定；失败时按无冲突处理）
+async function listNamesIn(dir: string): Promise<Set<string>> {
+  try {
+    const entries = await invoke('read_local_dir', { path: dir }) as FileNode[]
+    return new Set(entries.map(f => f.name))
+  } catch {
+    return new Set()
+  }
 }
 
 async function doRename() {
@@ -261,19 +282,22 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
       </div>
     </div>
 
-    <!-- 右键菜单（文件/目录项，clamp 防溢出窗口边缘） -->
+    <!-- 右键菜单（VSCode 对齐：文件右键无新建项，文件夹右键有且创建在其下） -->
     <div v-if="showMenu" class="context-menu" :style="menuStyle">
       <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doUploadToRemote">{{ t('common.upload') }}
       </div>
-      <div class="menu-item" @click="doNewFolder">{{ t('common.newFolder') }}</div>
+      <template v-if="menuTarget && menuTarget.is_dir">
+        <div class="menu-item" @click="doNewFile(menuTarget.path)">{{ t('common.newFile') }}</div>
+        <div class="menu-item" @click="doNewFolder(menuTarget.path)">{{ t('common.newFolder') }}</div>
+      </template>
       <div v-if="menuTarget" class="menu-item" @click="doRename">{{ t('common.rename') }}</div>
       <div v-if="menuTarget" class="menu-item" @click="doCopyPath">{{ t('common.copyPath') }}</div>
       <div v-if="menuTarget" class="menu-item" @click="doDelete">{{ t('common.delete') }}</div>
     </div>
     <!-- 空白区域右键菜单：新建文件/新建文件夹/刷新（VSCode 资源管理器对齐） -->
     <div v-if="blankMenu" class="context-menu" :style="blankMenuStyle" @click="closeBlankMenu">
-      <div class="menu-item" @click="doNewFile">{{ t('common.newFile') }}</div>
-      <div class="menu-item" @click="doNewFolder">{{ t('common.newFolder') }}</div>
+      <div class="menu-item" @click="doNewFile()">{{ t('common.newFile') }}</div>
+      <div class="menu-item" @click="doNewFolder()">{{ t('common.newFolder') }}</div>
       <div class="menu-item" @click="refresh">{{ t('common.refresh') }}</div>
     </div>
   </div>

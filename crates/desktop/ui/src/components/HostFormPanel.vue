@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // 主机新增/编辑滑出面板：从右侧覆盖主机栏（不覆盖工作区），带滑出动画
 // 覆盖式交互：完成/取消后才可进行下一次操作（主机栏无并发需求）
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import EyeToggle from './EyeToggle.vue'
 import { t } from '../composables/i18n'
 
@@ -68,7 +68,16 @@ watch(() => props.open, (v) => {
     showSecret.value = false
     creatingGroup.value = false
     groupSelect.value = form.value.group_name || ''
+    // 打开即聚焦首个输入框（名称，细节体验）
+    nextTick(() => nameInputRef.value?.focus())
   }
+})
+const nameInputRef = ref<HTMLInputElement>()
+const groupNameInputRef = ref<HTMLInputElement>()
+
+// 选择"新建分组"时聚焦分组名输入框
+watch(creatingGroup, (v) => {
+  if (v) nextTick(() => groupNameInputRef.value?.focus())
 })
 
 function submit() {
@@ -86,7 +95,7 @@ function submit() {
         <button class="btn" @click="emit('cancel')">{{ t('common.cancel') }}</button>
       </div>
       <form class="host-form" @submit.prevent="submit">
-        <label>{{ t('form.name') }} <input v-model="form.name" type="text" required :placeholder="t('form.namePlaceholder')" /></label>
+        <label>{{ t('form.name') }} <input ref="nameInputRef" v-model="form.name" type="text" required :placeholder="t('form.namePlaceholder')" /></label>
         <label>{{ t('form.address') }} <input v-model="form.address" type="text" required :placeholder="t('form.addressPlaceholder')" /></label>
         <label>{{ t('form.port') }} <input v-model.number="form.port" type="number" required min="1" max="65535" /></label>
         <label>{{ t('form.username') }} <input v-model="form.username" type="text" required :placeholder="t('form.usernamePlaceholder')" /></label>
@@ -131,7 +140,7 @@ function submit() {
             <option v-for="g in existingGroups" :key="g" :value="g">{{ g }}</option>
             <option value="__new__">{{ t('form.groupNew') }}</option>
           </select>
-          <input v-if="creatingGroup" v-model="form.group_name" type="text" :placeholder="t('form.groupNewName')" />
+          <input v-if="creatingGroup" ref="groupNameInputRef" v-model="form.group_name" type="text" :placeholder="t('form.groupNewName')" />
         </label>
         <label>{{ t('form.notes') }} <textarea v-model="form.notes" rows="3" :placeholder="t('form.notesPlaceholder')"></textarea></label>
         <label class="checkbox-label"><input v-model="form.favorite" type="checkbox" /> {{ t('form.favorite') }}</label>

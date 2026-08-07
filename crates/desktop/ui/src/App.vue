@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import HostPanel, { type Host } from './components/HostPanel.vue'
@@ -335,8 +335,11 @@ function promptPassword(host: Host): Promise<PasswordPromptResult> {
     password.value = ''
     savePasswordOnConnect.value = false
     showPasswordPrompt.value = true
+    // 打开即聚焦密码框（细节体验）
+    nextTick(() => passwordInputRef.value?.focus())
   })
 }
+const passwordInputRef = ref<HTMLInputElement>()
 
 // 密码弹框确认：resolve 密码与保存勾选并关闭
 function submitPromptPassword() {
@@ -692,7 +695,14 @@ async function uploadFile(sessionId: string, remoteDir: string, localPath: strin
 
 // 对话框输入框（prompt 模式）
 const dialogInput = ref('')
-watch(() => dialogState.visible, (v) => { if (v) dialogInput.value = dialogState.defaultValue })
+const dialogInputRef = ref<HTMLInputElement>()
+watch(() => dialogState.visible, (v) => {
+  if (v) dialogInput.value = dialogState.defaultValue
+  // 打开即聚焦（细节体验：用户无需再点一次输入框）
+  if (v && dialogState.mode === 'prompt') {
+    nextTick(() => dialogInputRef.value?.focus())
+  }
+})
 
 // 界面语言（i18n）
 const locale = ref<Locale>(getLocale())
@@ -870,7 +880,7 @@ onBeforeUnmount(() => {
         <h3>{{ dialogState.title }}</h3>
         <p>{{ dialogState.message }}</p>
         <form v-if="dialogState.mode === 'prompt'" @submit.prevent="closeDialog(dialogInput)">
-          <input v-model="dialogInput" type="text" autofocus />
+          <input ref="dialogInputRef" v-model="dialogInput" type="text" />
           <div class="modal-actions">
             <button type="submit" class="btn btn-primary">{{ t('common.ok') }}</button>
             <button type="button" class="btn" @click="closeDialog(null)">{{ t('common.cancel') }}</button>
@@ -906,7 +916,7 @@ onBeforeUnmount(() => {
         <h3>{{ t('hosts.enterPassword') }}</h3>
         <p>{{ t('hosts.connectingTo', { user: promptHost?.username || '', host: promptHost?.address || '' }) }}</p>
         <form @submit.prevent="submitPromptPassword">
-          <input v-model="password" type="password" :placeholder="t('hosts.passwordPlaceholder')" autofocus required />
+          <input ref="passwordInputRef" v-model="password" type="password" :placeholder="t('hosts.passwordPlaceholder')" required />
           <label class="modal-save-check">
             <input v-model="savePasswordOnConnect" type="checkbox" /> {{ t('hosts.savePasswordOnConnect') }}
           </label>

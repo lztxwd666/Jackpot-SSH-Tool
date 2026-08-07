@@ -4,6 +4,7 @@
 // 语言切换已移至左侧底部状态栏（用户反馈：主机栏与底栏分离，底栏后续放设置图标等功能）
 import { computed, ref } from 'vue'
 import { clampFloatPos } from '../composables/pos'
+import { useClickOutsideClose } from '../composables/menu'
 import { t } from '../composables/i18n'
 
 // 与后端 list_hosts 返回的 Host 结构一致（前端 host 列表即为完整 Host，不做收窄）
@@ -85,6 +86,8 @@ function onContextMenu(e: MouseEvent, host: Host) {
   menu.value = { x: e.clientX, y: e.clientY, host }
 }
 function closeMenu() { menu.value = null }
+// 菜单打开时注册全局点击关闭（点击菜单外任意处消除菜单，标准交互）
+useClickOutsideClose(menu, closeMenu)
 function pick(action: 'connect' | 'edit' | 'ping' | 'delete') {
   if (!menu.value) return
   const host = menu.value.host
