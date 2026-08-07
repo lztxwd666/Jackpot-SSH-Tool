@@ -39,17 +39,17 @@ const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remot
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'reconnect'): void
-  (e: 'download', remotePath: string, localDir?: string): void
-  (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string): void
+  (e: 'download', remotePath: string, localDir?: string, isDir?: boolean): void
+  (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string, isDir?: boolean): void
 }>()
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
 const localCurrentDir = ref('')
 const remoteCurrentDir = ref('/')
 
-// 本地文件树右键 "Upload to Remote"：上传到本标签的远程当前目录
-function uploadFromLocal(localPath: string) {
-  emit('upload', remoteCurrentDir.value || '/', localPath, localCurrentDir.value)
+// 本地文件树右键 "Upload to Remote"：上传到本标签的远程当前目录（文件或目录）
+function uploadFromLocal(localPath: string, isDir = false) {
+  emit('upload', remoteCurrentDir.value || '/', localPath, localCurrentDir.value, isDir)
 }
 </script>
 
@@ -61,7 +61,7 @@ function uploadFromLocal(localPath: string) {
     <div class="panel panel-relative" style="width:180px; min-width:180px;">
       <LocalFileTree
         :refreshKey="localRefreshKey"
-        @download="(p: string, dir: string) => emit('download', p, dir)"
+        @download="(p: string, dir: string, isDir?: boolean) => emit('download', p, dir, isDir)"
         @current-dir="(p: string) => localCurrentDir = p"
         @upload-request="uploadFromLocal"
       />
@@ -72,8 +72,8 @@ function uploadFromLocal(localPath: string) {
         :sessionId="tab.sessionId"
         :refreshKey="remoteRefreshKey"
         :locked="locked"
-        @download="(p: string) => emit('download', p, localCurrentDir)"
-        @upload="(dir: string, p: string) => emit('upload', dir, p, localCurrentDir)"
+        @download="(p: string, isDir?: boolean) => emit('download', p, localCurrentDir, isDir)"
+        @upload="(dir: string, p: string, isDir?: boolean) => emit('upload', dir, p, localCurrentDir, isDir)"
         @current-dir="(p: string) => remoteCurrentDir = p"
       />
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>

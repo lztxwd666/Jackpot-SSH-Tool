@@ -15,8 +15,8 @@ const REMOTE_DRAG_TYPE = 'application/x-jackpot-remote'
 const props = defineProps<{ sessionId: string; refreshKey: number; locked?: boolean }>()
 
 const emit = defineEmits<{
-  (e: 'download', remotePath: string): void
-  (e: 'upload', remoteDir: string, localPath: string): void
+  (e: 'download', remotePath: string, isDir?: boolean): void
+  (e: 'upload', remoteDir: string, localPath: string, isDir?: boolean): void
   (e: 'current-dir', path: string): void
 }>()
 
@@ -107,12 +107,11 @@ function refresh() {
   loadDir(currentPath.value)
 }
 
-// ---- 拖拽：远程文件拖出（下载到本地） ----
+// ---- 拖拽：远程文件/目录拖出（下载到本地；目录走递归传输） ----
 function onDragStart(e: DragEvent, f: FileNode) {
-  if (f.is_dir) return
   const dt = e.dataTransfer!
-  dt.setData(REMOTE_DRAG_TYPE, f.path)
-  dt.setData('text/plain', 'remote:' + f.path)
+  // JSON payload：路径 + 是否目录（接收端据此选择递归传输）
+  dt.setData(REMOTE_DRAG_TYPE, JSON.stringify({ path: f.path, isDir: f.is_dir }))
   dt.effectAllowed = 'copy'
 }
 
@@ -137,9 +136,20 @@ function onDrop(e: DragEvent) {
     return
   }
   // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
-  const localPath = dt.getData(LOCAL_DRAG_TYPE)
+  const raw = dt.getData(LOCAL_DRAG_TYPE)
+  if (!raw) return
+  // JSON payload（路径 + 是否目录）；旧格式纯路径按文件处理
+  let localPath = ''
+  let isDir = false
+  try {
+    const parsed = JSON.parse(raw)
+    localPath = parsed.path ?? ''
+    isDir = !!parsed.isDir
+  } catch {
+    localPath = raw
+  }
   if (localPath) {
-    emit('upload', currentPath.value, localPath)
+    emit('upload', currentPath.value, localPath, isDir)
   }
 }
 
@@ -244,9 +254,10 @@ async function listNamesIn(dir: string): Promise<Set<string>> {
     return new Set()
   }
 }
+// 下载（文件或目录，目录走递归传输）
 function doDownload() {
-  if (!menuTarget.value || menuTarget.value.is_dir) return
-  closeMenu(); emit('download', menuTarget.value.path)
+  if (!menuTarget.value) return
+  closeMenu(); emit('download', menuTarget.value.path, menuTarget.value.is_dir)
 }
 
 // sessionId 变化或刷新令牌变化时重新加载
@@ -298,7 +309,8 @@ watch(() => props.locked, (locked) => {
 
     <!-- 右键菜单（VSCode 对齐：文件右键无新建项，文件夹右键有且创建在其下） -->
     <div v-if="showMenu" class="context-menu" :style="menuStyle">
-      <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doDownload">{{ t('common.download') }}</div>
+      <!-- 下载（文件/目录均可，目录走递归传输） -->
+      <div v-if="menuTarget" class="menu-item" @click="doDownload">{{ t('common.download') }}</div>
       <template v-if="menuTarget && menuTarget.is_dir">
         <div class="menu-item" @click="doNewFile(menuTarget.path)">{{ t('common.newFile') }}</div>
         <div class="menu-item" @click="doNewFolder(menuTarget.path)">{{ t('common.newFolder') }}</div>

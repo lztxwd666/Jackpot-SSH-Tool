@@ -151,7 +151,15 @@ pub(crate) enum WorkerCommand {
         kind: TransferKind,
         remote: String,
         local: String,
-        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
+        reply: oneshot::Sender<CoreResult<u64>>,
+    },
+    /// 目录递归传输（批量文件，聚合进度；第三位为当前文件名）
+    SftpTransferTree {
+        kind: TransferKind,
+        remote: String,
+        local: String,
+        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
         reply: oneshot::Sender<CoreResult<u64>>,
     },
     CloseAllChannels,
@@ -647,8 +655,33 @@ impl Worker {
         kind: TransferKind,
         remote: &str,
         local: &str,
-        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
     ) -> CoreResult<u64> {
+        self.run_transfer(kind, move |w| match kind {
+            TransferKind::Download => w.transfer_download_inner(remote, local, &progress),
+            TransferKind::Upload => w.transfer_upload_inner(remote, local, &progress),
+        })
+    }
+
+    /// 目录递归传输（单文件命令与目录命令共用的 Locked/Unlocked 包裹）
+    fn handle_transfer_tree_inner(
+        &mut self,
+        kind: TransferKind,
+        remote: &str,
+        local: &str,
+        progress: tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
+    ) -> CoreResult<u64> {
+        self.run_transfer(kind, move |w| match kind {
+            TransferKind::Download => w.transfer_tree_download_inner(remote, local, &progress),
+            TransferKind::Upload => w.transfer_tree_upload_inner(remote, local, &progress),
+        })
+    }
+
+    /// 传输执行包裹：广播 Locked/Unlocked、置位/复位 transferring 标志
+    fn run_transfer<F>(&mut self, kind: TransferKind, f: F) -> CoreResult<u64>
+    where
+        F: FnOnce(&mut Self) -> CoreResult<u64>,
+    {
         let sftp_channel_id = self
             .sftp_channel_id()
             .ok_or_else(|| CoreError::Internal("sftp channel not found".into()))?;
@@ -661,10 +694,7 @@ impl Worker {
                 TransferKind::Upload => TransferDirection::Upload,
             },
         }));
-        let result = match kind {
-            TransferKind::Download => self.transfer_download_inner(remote, local, &progress),
-            TransferKind::Upload => self.transfer_upload_inner(remote, local, &progress),
-        };
+        let result = f(self);
         self.dispatch(CoreEvent::Transfer(TransferEvent::Unlocked {
             session_id: self.session_id(),
             channel_id: sftp_channel_id,
@@ -678,8 +708,25 @@ impl Worker {
         &mut self,
         remote_path: &str,
         local_path: &str,
-        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
     ) -> CoreResult<u64> {
+        // 单文件命令：实时进度 + 空文件名；核心逻辑在 transfer_one_download（目录传输复用）
+        self.transfer_one_download(remote_path, local_path, |done, total| {
+            let _ = progress.send((done, total, String::new()));
+        })
+    }
+
+    /// 单文件下载核心（不依赖命令上下文）：目录传输逐文件复用
+    /// on_progress 由调用方决定进度上报（单文件实时 / 目录聚合）
+    fn transfer_one_download<F>(
+        &mut self,
+        remote_path: &str,
+        local_path: &str,
+        mut on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64),
+    {
         // 获取远程文件大小（用于进度条）
         let total = sftp_retry_io(&mut self.raw_channels, &self.cancel, "stat", |sftp| {
             sftp.stat(std::path::Path::new(remote_path))
@@ -712,7 +759,7 @@ impl Worker {
                 .write_all(&chunk[..n])
                 .map_err(|e| CoreError::Internal(format!("local write failed: {e}")))?;
             done += n as u64;
-            let _ = progress.send((done, total));
+            on_progress(done, total);
         }
         // 完整性校验：写入字节数必须与远端文件大小一致
         if total > 0 && done != total {
@@ -735,8 +782,25 @@ impl Worker {
         &mut self,
         remote_path: &str,
         local_path: &str,
-        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64)>,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
     ) -> CoreResult<u64> {
+        // 单文件命令：实时进度 + 空文件名；核心逻辑在 transfer_one_upload（目录传输复用）
+        self.transfer_one_upload(remote_path, local_path, |done, total| {
+            let _ = progress.send((done, total, String::new()));
+        })
+    }
+
+    /// 单文件上传核心（不依赖命令上下文）：目录传输逐文件复用
+    /// 失败时清理不完整的远端文件（任何失败路径删除半成品）
+    fn transfer_one_upload<F>(
+        &mut self,
+        remote_path: &str,
+        local_path: &str,
+        mut on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64),
+    {
         // 获取本地文件大小（用于进度条）
         let total = std::fs::metadata(local_path)
             .map_err(|e| CoreError::Internal(format!("local metadata failed: {e}")))?
@@ -768,7 +832,7 @@ impl Worker {
                 write_full(&self.cancel, |buf| file.write(buf), &chunk[..n])
                     .map_err(|e| CoreError::Internal(format!("sftp write failed: {e}")))?;
                 done += n as u64;
-                let _ = progress.send((done, total));
+                on_progress(done, total);
             }
             // 完整性校验：远端文件大小必须与本地一致
             let remote_size =
@@ -792,6 +856,145 @@ impl Worker {
             tracing::warn!(%remote_path, %local_path, "upload failed, partial remote file removed");
         }
         result
+    }
+
+    /// 目录递归传输（下载）：枚举远程目录树 → 逐文件复用 transfer_one_download，
+    /// 进度按文件粒度上报聚合字节数（done/total 为全任务累计，第三位为当前文件相对路径）
+    fn transfer_tree_download_inner(
+        &mut self,
+        remote_dir: &str,
+        local_dir: &str,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
+    ) -> CoreResult<u64> {
+        // 枚举远程目录树（含空目录项）
+        let mut entries = Vec::new();
+        self.collect_remote_entries(remote_dir, "", &mut entries)?;
+        let total: u64 = entries.iter().filter(|e| !e.3).map(|e| e.2).sum();
+        let mut done: u64 = 0;
+        for (remote, rel, _size, is_dir) in entries {
+            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(CoreError::Internal("transfer cancelled".into()));
+            }
+            let local = std::path::Path::new(local_dir).join(&rel);
+            if is_dir {
+                // 空目录：本地创建对应目录（父目录在文件处理时已建）
+                std::fs::create_dir_all(&local)
+                    .map_err(|e| CoreError::Internal(format!("create local dir failed: {e}")))?;
+                continue;
+            }
+            // 创建父目录后传输单个文件（实时进度不在此上报，文件完成上报聚合）
+            if let Some(parent) = local.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| CoreError::Internal(format!("create local dir failed: {e}")))?;
+            }
+            let n = self.transfer_one_download(&remote, &local.to_string_lossy(), |_d, _t| {})?;
+            done += n;
+            let _ = progress.send((done, total, rel));
+        }
+        Ok(done)
+    }
+
+    /// 目录递归传输（上传）：枚举本地目录树 → 逐级创建远端目录 → 逐文件复用
+    /// transfer_one_upload，进度按文件粒度上报聚合字节数
+    fn transfer_tree_upload_inner(
+        &mut self,
+        local_dir: &str,
+        remote_dir: &str,
+        progress: &tokio::sync::mpsc::UnboundedSender<(u64, u64, String)>,
+    ) -> CoreResult<u64> {
+        // 枚举本地目录树（含空目录项）
+        let mut entries = Vec::new();
+        self.collect_local_entries(std::path::Path::new(local_dir), "", &mut entries)?;
+        let total: u64 = entries.iter().filter(|e| !e.3).map(|e| e.2).sum();
+        let mut done: u64 = 0;
+        for (local, rel, _size, is_dir) in entries {
+            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(CoreError::Internal("transfer cancelled".into()));
+            }
+            let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), rel);
+            if is_dir {
+                // 远端创建目录（已存在时 mkdir 失败，容忍：目录结构已就绪）
+                let _ = sftp_retry_io(&mut self.raw_channels, &self.cancel, "mkdir", |sftp| {
+                    sftp.mkdir(std::path::Path::new(&remote), 0o755)
+                });
+                continue;
+            }
+            let n = self.transfer_one_upload(&remote, &local, |_d, _t| {})?;
+            done += n;
+            let _ = progress.send((done, total, rel));
+        }
+        Ok(done)
+    }
+
+    /// 递归枚举远程目录：条目为 (远程路径, 相对路径, 大小, 是否目录)
+    fn collect_remote_entries(
+        &mut self,
+        dir: &str,
+        rel: &str,
+        out: &mut Vec<(String, String, u64, bool)>,
+    ) -> CoreResult<()> {
+        let entries = sftp_retry_io(&mut self.raw_channels, &self.cancel, "readdir", |sftp| {
+            sftp.readdir(std::path::Path::new(dir))
+        })?;
+        for (p, stat) in entries {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            if name.is_empty() || name == "." || name == ".." {
+                continue;
+            }
+            let remote = format!("{}/{}", dir.trim_end_matches('/'), name);
+            let rel_path = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            if stat.is_dir() {
+                out.push((remote.clone(), rel_path.clone(), 0, true));
+                self.collect_remote_entries(&remote, &rel_path, out)?;
+            } else {
+                out.push((remote, rel_path, stat.size.unwrap_or(0), false));
+            }
+        }
+        Ok(())
+    }
+
+    /// 递归枚举本地目录：条目为 (本地路径, 相对路径, 大小, 是否目录)
+    fn collect_local_entries(
+        &self,
+        dir: &std::path::Path,
+        rel: &str,
+        out: &mut Vec<(String, String, u64, bool)>,
+    ) -> CoreResult<()> {
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| CoreError::Internal(format!("read local dir failed: {e}")))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| CoreError::Internal(format!("read local entry failed: {e}")))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let rel_path = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            let ft = entry
+                .file_type()
+                .map_err(|e| CoreError::Internal(format!("local file type failed: {e}")))?;
+            if ft.is_dir() {
+                out.push((entry.path().to_string_lossy().to_string(), rel_path.clone(), 0, true));
+                self.collect_local_entries(&entry.path(), &rel_path, out)?;
+            } else {
+                out.push((
+                    entry.path().to_string_lossy().to_string(),
+                    rel_path,
+                    entry.metadata().map(|m| m.len()).unwrap_or(0),
+                    false,
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 处理队列中所有已到达命令；返回 false 表示应结束线程
@@ -928,6 +1131,24 @@ impl Worker {
                 }
                 let r = self.handle_transfer_inner(kind, &remote, &local, progress);
                 // 传输中到达的断开/关闭在传输栈弹出后冲刷（延迟释放连接，防 use-after-free）
+                self.flush_pending();
+                let _ = reply.send(r);
+            }
+            WorkerCommand::SftpTransferTree {
+                kind,
+                remote,
+                local,
+                progress,
+                reply,
+            } => {
+                // 目录传输与单文件传输互斥（同一 transferring 标志，拒绝嵌套）
+                if self.transferring {
+                    let _ = reply.send(Err(CoreError::Internal(
+                        "transfer already in progress".into(),
+                    )));
+                    return !self.closed;
+                }
+                let r = self.handle_transfer_tree_inner(kind, &remote, &local, progress);
                 self.flush_pending();
                 let _ = reply.send(r);
             }

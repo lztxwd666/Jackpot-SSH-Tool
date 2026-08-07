@@ -11,6 +11,7 @@ use tauri::{Emitter, State};
 /// 类型化定义：扩展字段时前后端同步修改，避免手拼 JSON 的字符串约定
 /// verifying：传输完成进入校验阶段（大文件 SHA-256 校验可能耗时数秒，
 /// 前端据此显示"校验中"提示，避免用户误以为传输未成功）
+/// filename：目录传输当前文件相对路径（单文件传输为空串）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TransferProgress {
     pub id: String,
@@ -18,6 +19,8 @@ pub struct TransferProgress {
     pub total: u64,
     #[serde(default)]
     pub verifying: bool,
+    #[serde(default)]
+    pub filename: String,
 }
 
 /// 列出远程目录内容
@@ -161,6 +164,7 @@ pub async fn sftp_download_file(
                         done,
                         total,
                         verifying: false,
+                        filename: String::new(),
                     },
                 );
             }
@@ -191,6 +195,7 @@ pub async fn sftp_download_file(
             done,
             total: done,
             verifying: true,
+            filename: String::new(),
         },
     );
     let rp2 = rp.clone();
@@ -258,6 +263,7 @@ pub async fn sftp_upload_file(
                         done,
                         total,
                         verifying: false,
+                        filename: String::new(),
                     },
                 );
             }
@@ -286,6 +292,7 @@ pub async fn sftp_upload_file(
             done,
             total: done,
             verifying: true,
+            filename: String::new(),
         },
     );
     let rp2 = rp.clone();
@@ -313,4 +320,81 @@ pub async fn sftp_upload_file(
         }
     }
     Ok(done)
+}
+
+/// 目录递归下载：进度按文件粒度上报（filename 为当前文件相对路径）
+/// 不做逐文件 SHA-256 校验（目录级校验性能代价大；单文件传输保留校验）
+#[tauri::command]
+pub async fn sftp_download_tree(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    remote_path: String,
+    local_path: String,
+    task_id: String,
+    expected_dir: String,
+) -> Result<u64, String> {
+    let channel = get_sftp_channel(&state, &session_id).await?;
+    validate_path_within(&local_path, &expected_dir)?;
+
+    let rp = remote_path.clone();
+    let lp = local_path.clone();
+    let ch_io = channel.clone();
+    let app2 = app.clone();
+    let tid = task_id.clone();
+    tokio::task::spawn_blocking(move || {
+        ch_io.sftp_download_tree(&rp, &lp, move |done, total, name| {
+            let _ = app2.emit(
+                "transfer-progress",
+                TransferProgress {
+                    id: tid.clone(),
+                    done,
+                    total,
+                    verifying: false,
+                    filename: name.to_string(),
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// 目录递归上传：进度按文件粒度上报（filename 为当前文件相对路径），不做逐文件校验
+#[tauri::command]
+pub async fn sftp_upload_tree(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    remote_path: String,
+    local_path: String,
+    task_id: String,
+    expected_dir: String,
+) -> Result<u64, String> {
+    let channel = get_sftp_channel(&state, &session_id).await?;
+    validate_path_within(&local_path, &expected_dir)?;
+
+    let rp = remote_path.clone();
+    let lp = local_path.clone();
+    let ch_io = channel.clone();
+    let app2 = app.clone();
+    let tid = task_id.clone();
+    tokio::task::spawn_blocking(move || {
+        ch_io.sftp_upload_tree(&rp, &lp, move |done, total, name| {
+            let _ = app2.emit(
+                "transfer-progress",
+                TransferProgress {
+                    id: tid.clone(),
+                    done,
+                    total,
+                    verifying: false,
+                    filename: name.to_string(),
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }

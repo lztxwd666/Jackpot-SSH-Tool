@@ -101,6 +101,8 @@ pub fn run() {
             commands::sftp_rename,
             commands::sftp_download_file,
             commands::sftp_upload_file,
+            commands::sftp_download_tree,
+            commands::sftp_upload_tree,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run tauri application");

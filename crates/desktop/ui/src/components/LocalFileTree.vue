@@ -16,9 +16,9 @@ const REMOTE_DRAG_TYPE = 'application/x-jackpot-remote'
 const props = defineProps<{ refreshKey: number }>()
 
 const emit = defineEmits<{
-  (e: 'download', remotePath: string, localDir: string): void
+  (e: 'download', remotePath: string, localDir: string, isDir?: boolean): void
   (e: 'current-dir', path: string): void
-  (e: 'upload-request', localPath: string): void
+  (e: 'upload-request', localPath: string, isDir?: boolean): void
 }>()
 
 interface FileNode {
@@ -93,12 +93,11 @@ async function loadDir(path: string) {
   loading.value = false
 }
 
-// ---- 拖拽：本地文件拖出（上传到远程） ----
+// ---- 拖拽：本地文件/目录拖出（上传到远程；目录走递归传输） ----
 function onDragStart(e: DragEvent, file: FileNode) {
-  if (file.is_dir) return
   const dt = e.dataTransfer!
-  dt.setData(LOCAL_DRAG_TYPE, file.path)
-  dt.setData('text/plain', 'local:' + file.path)
+  // JSON payload：路径 + 是否目录（接收端据此选择递归传输）
+  dt.setData(LOCAL_DRAG_TYPE, JSON.stringify({ path: file.path, isDir: file.is_dir }))
   dt.effectAllowed = 'copy'
 }
 
@@ -123,9 +122,20 @@ function onDrop(e: DragEvent) {
     return
   }
   // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
-  const remotePath = dt.getData(REMOTE_DRAG_TYPE)
+  const raw = dt.getData(REMOTE_DRAG_TYPE)
+  if (!raw) return
+  // JSON payload（路径 + 是否目录）；旧格式纯路径按文件处理
+  let remotePath = ''
+  let isDir = false
+  try {
+    const parsed = JSON.parse(raw)
+    remotePath = parsed.path ?? ''
+    isDir = !!parsed.isDir
+  } catch {
+    remotePath = raw
+  }
   if (remotePath) {
-    emit('download', remotePath, currentPath.value)
+    emit('download', remotePath, currentPath.value, isDir)
   }
 }
 
@@ -148,10 +158,11 @@ function onContextMenu(e: MouseEvent, file: FileNode) {
 }
 function closeMenu() { showMenu.value = false }
 
+// 上传到远程（文件或目录，目录走递归传输）
 function doUploadToRemote() {
-  if (!menuTarget.value || menuTarget.value.is_dir) return
+  if (!menuTarget.value) return
   closeMenu()
-  emit('upload-request', menuTarget.value.path)
+  emit('upload-request', menuTarget.value.path, menuTarget.value.is_dir)
 }
 
 // 新建文件夹（dir 缺省为当前目录；右键文件夹场景传该文件夹路径，在该文件夹下创建）
@@ -284,8 +295,8 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 
     <!-- 右键菜单（VSCode 对齐：文件右键无新建项，文件夹右键有且创建在其下） -->
     <div v-if="showMenu" class="context-menu" :style="menuStyle">
-      <div v-if="menuTarget && !menuTarget.is_dir" class="menu-item" @click="doUploadToRemote">{{ t('common.upload') }}
-      </div>
+      <!-- 上传（文件/目录均可，目录走递归传输） -->
+      <div v-if="menuTarget" class="menu-item" @click="doUploadToRemote">{{ t('common.upload') }}</div>
       <template v-if="menuTarget && menuTarget.is_dir">
         <div class="menu-item" @click="doNewFile(menuTarget.path)">{{ t('common.newFile') }}</div>
         <div class="menu-item" @click="doNewFolder(menuTarget.path)">{{ t('common.newFolder') }}</div>

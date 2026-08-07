@@ -94,18 +94,47 @@ impl Channel {
     where
         F: FnMut(u64, u64) + Send + 'static,
     {
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.transfer(TransferKind::Download, remote_path, local_path, on_progress)
+    }
+
+    /// 目录递归下载（同步）：投递 SftpTransferTree 命令，进度带当前文件名
+    pub fn sftp_download_tree<F>(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64, &str) + Send + 'static,
+    {
+        self.transfer_tree(TransferKind::Download, remote_path, local_path, on_progress)
+    }
+
+    /// 单文件传输投递（进度回调为 (done, total)；下载失败清理本地半成品，
+    /// 上传半成品由 worker 侧清理）
+    fn transfer<F>(
+        &self,
+        kind: TransferKind,
+        remote_path: &str,
+        local_path: &str,
+        on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64) + Send + 'static,
+    {
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, u64, String)>();
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         // 守护线程：转发进度到回调（传输完成后由 drop 关闭通道使其退出，随后 join）
         let guard = std::thread::spawn(move || {
             let mut cb = on_progress;
-            while let Some((done, total)) = progress_rx.blocking_recv() {
+            while let Some((done, total, _name)) = progress_rx.blocking_recv() {
                 cb(done, total);
             }
         });
         let r = self.worker.call(
             WorkerCommand::SftpTransfer {
-                kind: TransferKind::Download,
+                kind,
                 remote: remote_path.to_string(),
                 local: local_path.to_string(),
                 progress: progress_tx.clone(),
@@ -115,7 +144,9 @@ impl Channel {
         );
         drop(progress_tx); // 关闭进度通道，守护线程消费完剩余消息后退出
         let _ = guard.join();
-        if let Err(e) = &r {
+        if kind == TransferKind::Download
+            && let Err(e) = &r
+        {
             // 清理不完整的本地文件（旧实现行为保持：任何失败路径删除半成品）
             let _ = std::fs::remove_file(local_path);
             tracing::warn!(%remote_path, %local_path, error = %e, "download failed, partial local file removed");
@@ -123,8 +154,44 @@ impl Channel {
         r
     }
 
+    /// 目录递归传输投递（进度回调为 (done, total, 当前文件相对路径)）
+    fn transfer_tree<F>(
+        &self,
+        kind: TransferKind,
+        remote_path: &str,
+        local_path: &str,
+        on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64, &str) + Send + 'static,
+    {
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(u64, u64, String)>();
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        // 守护线程：转发进度到回调（传输完成后由 drop 关闭通道使其退出，随后 join）
+        let guard = std::thread::spawn(move || {
+            let mut cb = on_progress;
+            while let Some((done, total, name)) = progress_rx.blocking_recv() {
+                cb(done, total, &name);
+            }
+        });
+        let r = self.worker.call(
+            WorkerCommand::SftpTransferTree {
+                kind,
+                remote: remote_path.to_string(),
+                local: local_path.to_string(),
+                progress: progress_tx.clone(),
+                reply: reply_tx,
+            },
+            reply_rx,
+        );
+        drop(progress_tx); // 关闭进度通道，守护线程消费完剩余消息后退出
+        let _ = guard.join();
+        r
+    }
+
     /// 流式上传（同步）：投递 SftpTransfer 命令，进度经守护线程转发到 on_progress
-    /// 失败时半成品远端文件由 worker 侧清理（transfer_upload_inner）
+    /// 失败时半成品远端文件由 worker 侧清理（transfer_one_upload）
     pub fn sftp_upload_file<F>(
         &self,
         remote_path: &str,
@@ -134,27 +201,19 @@ impl Channel {
     where
         F: FnMut(u64, u64) + Send + 'static,
     {
-        let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        // 守护线程：转发进度到回调（传输完成后由 drop 关闭通道使其退出，随后 join）
-        let guard = std::thread::spawn(move || {
-            let mut cb = on_progress;
-            while let Some((done, total)) = progress_rx.blocking_recv() {
-                cb(done, total);
-            }
-        });
-        let r = self.worker.call(
-            WorkerCommand::SftpTransfer {
-                kind: TransferKind::Upload,
-                remote: remote_path.to_string(),
-                local: local_path.to_string(),
-                progress: progress_tx.clone(),
-                reply: reply_tx,
-            },
-            reply_rx,
-        );
-        drop(progress_tx); // 关闭进度通道，守护线程消费完剩余消息后退出
-        let _ = guard.join();
-        r
+        self.transfer(TransferKind::Upload, remote_path, local_path, on_progress)
+    }
+
+    /// 目录递归上传（同步）：投递 SftpTransferTree 命令，进度带当前文件名
+    pub fn sftp_upload_tree<F>(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        on_progress: F,
+    ) -> CoreResult<u64>
+    where
+        F: FnMut(u64, u64, &str) + Send + 'static,
+    {
+        self.transfer_tree(TransferKind::Upload, remote_path, local_path, on_progress)
     }
 }

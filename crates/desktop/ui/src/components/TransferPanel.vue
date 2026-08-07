@@ -9,6 +9,7 @@ export interface TransferTask {
   direction: 'download' | 'upload'
   done: number
   total: number
+  filename?: string // 目录传输当前文件相对路径（单文件传输为空）
 }
 
 defineProps<{ transfers: Record<string, TransferTask> }>()
@@ -22,8 +23,12 @@ function pct(t: TransferTask): number {
 <template>
   <div v-if="Object.keys(transfers).length > 0" class="transfer-panel">
     <div v-for="tr in Object.values(transfers)" :key="tr.id" class="transfer-item">
-      <!-- 超长文件名省略号截断（保持进度条宽度），悬停 title 显示全名 -->
-      <span class="t-name" :title="tr.name">{{ tr.direction === 'download' ? '↓' : '↑' }} {{ tr.name }}</span>
+      <div class="t-main">
+        <!-- 超长文件名省略号截断（保持进度条宽度），悬停 title 显示全名 -->
+        <span class="t-name" :title="tr.name">{{ tr.direction === 'download' ? '↓' : '↑' }} {{ tr.name }}</span>
+        <!-- 目录传输：当前文件相对路径（小字次显） -->
+        <span v-if="tr.filename" class="t-file" :title="tr.filename">{{ tr.filename }}</span>
+      </div>
       <div class="t-bar">
         <div class="t-fill" :style="{ width: pct(tr) + '%' }"></div>
       </div>
@@ -43,7 +48,9 @@ function pct(t: TransferTask): number {
   min-width: 280px; max-width: 380px;
 }
 .transfer-item { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; }
-.t-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }
+.t-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.t-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }
+.t-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.68rem; color: var(--color-text); opacity: 0.55; }
 .t-bar { flex: 2; height: 8px; background: var(--color-background-mute); border-radius: 4px; overflow: hidden; }
 .t-fill {
   height: 100%; background: hsla(160, 100%, 37%, 1); border-radius: 4px;

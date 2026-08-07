@@ -566,6 +566,7 @@ interface TransferTask {
   direction: 'download' | 'upload'
   done: number
   total: number
+  filename?: string // 目录传输当前文件相对路径（单文件传输为空）
 }
 
 // 已取消的传输（taskId）：closeTab 关闭会话时置位，迟到结果静默（不弹失败 toast、不刷新树）
@@ -580,6 +581,7 @@ interface TransferProgress {
   done: number
   total: number
   verifying?: boolean
+  filename?: string
 }
 const transfers = ref<Record<string, TransferTask>>({})
 const downloading = ref<Record<string, boolean>>({})  // 下载防重入守卫
@@ -594,9 +596,9 @@ function bumpRemoteRefresh(sessionId: string) { remoteRefresh.value[sessionId] =
 // SFTP 操作（按 tab 的 sessionId 调用）
 // 下载目标优先级：拖拽目标目录 > 本地文件树当前目录（tab 内）> 用户主目录\Downloads > 用户主目录
 // 注意：C:\Users 根目录因 UAC 权限限制不可写，切勿作为默认目标
-async function downloadFile(sessionId: string, remotePath: string, localDir?: string) {
+async function downloadFile(sessionId: string, remotePath: string, localDir?: string, isDir = false) {
   if (!sessionId) return
-  // 防重入：同一文件正在下载时忽略重复点击
+  // 防重入：同一文件/目录正在下载时忽略重复点击
   if (downloading.value[remotePath]) {
     showToast(t('toast.downloadInProgress'), 'info')
     return
@@ -620,9 +622,16 @@ async function downloadFile(sessionId: string, remotePath: string, localDir?: st
   const taskId = crypto.randomUUID()
   transfers.value[taskId] = { id: taskId, sessionId, name: fileName, direction: 'download', done: 0, total: 0 }
   try {
-    await invoke('sftp_download_file', {
-      sessionId, remotePath, localPath, taskId, expectedDir: dir,
-    })
+    // 目录走递归传输命令（进度按文件粒度，不做逐文件校验）；单文件保留 SHA-256 校验
+    if (isDir) {
+      await invoke('sftp_download_tree', {
+        sessionId, remotePath, localPath, taskId, expectedDir: dir,
+      })
+    } else {
+      await invoke('sftp_download_file', {
+        sessionId, remotePath, localPath, taskId, expectedDir: dir,
+      })
+    }
     if (cancelledTransfers.has(taskId)) return // 会话已关闭：迟到结果静默
     // 刷新对应标签的本地文件树
     bumpLocalRefresh(sessionId)
@@ -649,9 +658,9 @@ async function downloadFile(sessionId: string, remotePath: string, localDir?: st
   }
 }
 
-async function uploadFile(sessionId: string, remoteDir: string, localPath: string, expectedDir?: string) {
+async function uploadFile(sessionId: string, remoteDir: string, localPath: string, expectedDir?: string, isDir = false) {
   if (!sessionId) return
-  // 防重入：同一文件正在上传时忽略重复操作
+  // 防重入：同一文件/目录正在上传时忽略重复操作
   if (uploading.value[localPath]) {
     showToast(t('toast.uploadInProgress'), 'info')
     return
@@ -664,10 +673,18 @@ async function uploadFile(sessionId: string, remoteDir: string, localPath: strin
   const taskId = crypto.randomUUID()
   transfers.value[taskId] = { id: taskId, sessionId, name: fileName, direction: 'upload', done: 0, total: 0 }
   try {
-    await invoke('sftp_upload_file', {
-      sessionId, remotePath, localPath, taskId,
-      expectedDir: expectedDir || homeDir.value || '',
-    })
+    // 目录走递归传输命令；单文件保留 SHA-256 校验
+    if (isDir) {
+      await invoke('sftp_upload_tree', {
+        sessionId, remotePath, localPath, taskId,
+        expectedDir: expectedDir || homeDir.value || '',
+      })
+    } else {
+      await invoke('sftp_upload_file', {
+        sessionId, remotePath, localPath, taskId,
+        expectedDir: expectedDir || homeDir.value || '',
+      })
+    }
     if (cancelledTransfers.has(taskId)) return // 会话已关闭：迟到结果静默
     // 刷新对应标签的远程文件树
     bumpRemoteRefresh(sessionId)
@@ -785,6 +802,7 @@ onMounted(async () => {
     if (tr) {
       tr.done = event.payload.done
       tr.total = event.payload.total
+      tr.filename = event.payload.filename ?? ''
     }
     // 校验阶段：顶部弹出绿色"校验中..."常驻 toast（与"已下载到"等结果 toast 同位置，
     // 校验完移除后结果 toast 接上，衔接直观）；同一传输重复事件幂等（已存在不重复弹）；
@@ -832,8 +850,8 @@ onBeforeUnmount(() => {
             :locked="tab.locked"
             @close="closeTab(tab.id)"
             @reconnect="reconnectTab(tab)"
-            @download="(p: string, dir?: string) => downloadFile(tab.sessionId, p, dir)"
-            @upload="(dir: string, p: string, expectedDir?: string) => uploadFile(tab.sessionId, dir, p, expectedDir)"
+            @download="(p: string, dir?: string, isDir?: boolean) => downloadFile(tab.sessionId, p, dir, isDir)"
+            @upload="(dir: string, p: string, expectedDir?: string, isDir?: boolean) => uploadFile(tab.sessionId, dir, p, expectedDir, isDir)"
           />
         </template>
       </div>
