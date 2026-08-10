@@ -242,5 +242,4 @@ mod tests {
             if reason == "channel write failed: test"
         ));
     }
-
 }
