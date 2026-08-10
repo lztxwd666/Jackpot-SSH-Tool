@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, reactive, computed, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
-import { formatFileSize, isValidNewName, resolveNameConflict, copyPath } from '../composables/fs'
+import { formatFileSize, isValidNewName, resolveNameConflict, copyPath, parseDragPayload } from '../composables/fs'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
 import FileTreeHeader from './FileTreeHeader.vue'
@@ -30,7 +30,9 @@ interface FileNode {
 
 const currentPath = ref('/')
 const files = ref<FileNode[]>([])
-const selected = ref('')
+// 多选选区（VSCode 交互：Ctrl 点选切换 / Shift 范围选 / 普通单击单选）
+const selected = reactive(new Set<string>())
+let anchor: string | null = null
 const loading = ref(false)
 const error = ref('')
 const showMenu = ref(false)
@@ -83,6 +85,9 @@ async function loadDir(path: string) {
     if (seq !== loadSeq) return // 过期响应：已有更新的请求
     files.value = result
     currentPath.value = path
+    // 目录切换：旧目录的选区失效
+    selected.clear()
+    anchor = null
     loaded.value = true
     emit('current-dir', path)
   } catch (e) {
@@ -93,9 +98,46 @@ async function loadDir(path: string) {
   loading.value = false
 }
 
-function enterDir(f: FileNode) {
-  selected.value = f.path
+// 单击交互（VSCode 多选参考）：Ctrl 点选切换 / Shift 范围选 / 普通单击单选
+// 普通单击目录保留"进入目录"行为（文件管理器风格）；Ctrl/Shift 仅选择不导航
+function onClickItem(e: MouseEvent, f: FileNode) {
+  if (e.ctrlKey || e.metaKey) {
+    if (selected.has(f.path)) selected.delete(f.path)
+    else selected.add(f.path)
+    anchor = f.path
+    return
+  }
+  if (e.shiftKey) {
+    rangeSelect(f.path)
+    return
+  }
+  selected.clear()
+  selected.add(f.path)
+  anchor = f.path
   if (f.is_dir) loadDir(f.path)
+}
+
+// Shift 范围选：从锚点到当前项之间的全部项（列表顺序）
+function rangeSelect(path: string) {
+  const paths = files.value.map(f => f.path)
+  const cur = paths.indexOf(path)
+  const anc = anchor ? paths.indexOf(anchor) : cur
+  if (cur < 0 || anc < 0) {
+    selected.clear()
+    selected.add(path)
+    return
+  }
+  const [start, end] = cur < anc ? [cur, anc] : [anc, cur]
+  selected.clear()
+  for (let i = start; i <= end; i++) selected.add(paths[i])
+}
+
+// 双击进入目录（保留；单击已处理选中）
+function enterDir(f: FileNode) {
+  if (f.is_dir) loadDir(f.path)
+  selected.clear()
+  selected.add(f.path)
+  anchor = f.path
 }
 
 function goUp() {
@@ -110,8 +152,14 @@ function refresh() {
 // ---- 拖拽：远程文件/目录拖出（下载到本地；目录走递归传输） ----
 function onDragStart(e: DragEvent, f: FileNode) {
   const dt = e.dataTransfer!
-  // JSON payload：路径 + 是否目录（接收端据此选择递归传输）
-  dt.setData(REMOTE_DRAG_TYPE, JSON.stringify({ path: f.path, isDir: f.is_dir }))
+  // 拖拽项在多选选区中：拖整个选区；否则拖单项（VSCode 交互）
+  let items: { path: string; isDir: boolean }[]
+  if (selected.has(f.path) && selected.size > 1) {
+    items = files.value.filter(x => selected.has(x.path)).map(x => ({ path: x.path, isDir: x.is_dir }))
+  } else {
+    items = [{ path: f.path, isDir: f.is_dir }]
+  }
+  dt.setData(REMOTE_DRAG_TYPE, JSON.stringify({ items }))
   dt.effectAllowed = 'copy'
 }
 
@@ -144,28 +192,56 @@ function onDrop(e: DragEvent) {
   // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
   const raw = dt.getData(LOCAL_DRAG_TYPE)
   if (!raw) return
-  // JSON payload（路径 + 是否目录）；旧格式纯路径按文件处理
-  let localPath = ''
-  let isDir = false
-  try {
-    const parsed = JSON.parse(raw)
-    localPath = parsed.path ?? ''
-    isDir = !!parsed.isDir
-  } catch {
-    localPath = raw
-  }
-  if (localPath) {
-    emit('upload', currentPath.value, localPath, isDir)
+  // 解析载荷（多选数组 / 单选对象 / 旧格式），逐项上传
+  for (const item of parseDragPayload(raw)) {
+    emit('upload', currentPath.value, item.path, item.isDir)
   }
 }
 
 // 右键菜单
 function onContextMenu(e: MouseEvent, f: FileNode) {
   e.preventDefault()
+  // 右键项不在选区中：重置选区为该单项（VSCode 交互）；在选区中则保持（批量操作入口）
+  if (!selected.has(f.path)) {
+    selected.clear()
+    selected.add(f.path)
+    anchor = f.path
+  }
   menuTarget.value = f
   menuX.value = e.clientX
   menuY.value = e.clientY
   showMenu.value = true
+}
+
+// 批量下载（多选）：逐项循环复用现有事件链
+function doDownloadMany() {
+  if (!menuTarget.value) return
+  closeMenu()
+  for (const f of files.value) {
+    if (selected.has(f.path)) emit('download', f.path, f.is_dir)
+  }
+}
+
+// 批量删除（多选）：确认后逐项删除（远端无回收站，必须确认）
+async function doDeleteMany() {
+  const targets = files.value.filter(f => selected.has(f.path))
+  if (!targets.length || !props.sessionId) return
+  closeMenu()
+  const ok = await confirmDialog(t('tree.deleteManyConfirm', { n: String(targets.length) }))
+  if (!ok) return
+  let failed = 0
+  for (const item of targets) {
+    try {
+      await invoke('sftp_delete', { sessionId: props.sessionId, path: item.path, isDir: item.is_dir })
+    } catch (e) {
+      failed++
+      showToast(t('toast.deleteFailed', { err: String(e) }), 'error', 5000)
+    }
+  }
+  loadDir(currentPath.value)
+  if (failed === 0) {
+    showToast(t('tree.deletedN', { n: String(targets.length) }), 'success')
+  }
 }
 function closeMenu() { showMenu.value = false }
 
@@ -298,9 +374,9 @@ watch(() => props.locked, (locked) => {
         v-for="f in files"
         :key="f.path"
         class="tree-node"
-        :class="{ selected: selected === f.path }"
+        :class="{ selected: selected.has(f.path) }"
         :draggable="true"
-        @click="enterDir(f)"
+        @click="onClickItem($event, f)"
         @dblclick="enterDir(f)"
         @dragstart="onDragStart($event, f)"
         @contextmenu="onContextMenu($event, f)"
@@ -313,17 +389,23 @@ watch(() => props.locked, (locked) => {
       </div>
     </div>
 
-    <!-- 右键菜单（VSCode 对齐：文件右键无新建项，文件夹右键有且创建在其下） -->
+    <!-- 右键菜单：多选为批量操作，单选为原有单项操作（VSCode 交互） -->
     <div v-if="showMenu" class="context-menu" :style="menuStyle">
-      <!-- 下载（文件/目录均可，目录走递归传输） -->
-      <div v-if="menuTarget" class="menu-item" @click="doDownload">{{ t('common.download') }}</div>
-      <template v-if="menuTarget && menuTarget.is_dir">
-        <div class="menu-item" @click="doNewFile(menuTarget.path)">{{ t('common.newFile') }}</div>
-        <div class="menu-item" @click="doNewFolder(menuTarget.path)">{{ t('common.newFolder') }}</div>
+      <template v-if="menuTarget && selected.size > 1">
+        <div class="menu-item" @click="doDownloadMany">{{ t('tree.downloadN', { n: String(selected.size) }) }}</div>
+        <div class="menu-item" @click="doDeleteMany">{{ t('tree.deleteN', { n: String(selected.size) }) }}</div>
       </template>
-      <div v-if="menuTarget" class="menu-item" @click="doRename">{{ t('common.rename') }}</div>
-      <div v-if="menuTarget" class="menu-item" @click="doCopyPath">{{ t('common.copyPath') }}</div>
-      <div v-if="menuTarget" class="menu-item" @click="doDelete">{{ t('common.delete') }}</div>
+      <template v-else>
+        <!-- 下载（文件/目录均可，目录走递归传输） -->
+        <div v-if="menuTarget" class="menu-item" @click="doDownload">{{ t('common.download') }}</div>
+        <template v-if="menuTarget && menuTarget.is_dir">
+          <div class="menu-item" @click="doNewFile(menuTarget.path)">{{ t('common.newFile') }}</div>
+          <div class="menu-item" @click="doNewFolder(menuTarget.path)">{{ t('common.newFolder') }}</div>
+        </template>
+        <div v-if="menuTarget" class="menu-item" @click="doRename">{{ t('common.rename') }}</div>
+        <div v-if="menuTarget" class="menu-item" @click="doCopyPath">{{ t('common.copyPath') }}</div>
+        <div v-if="menuTarget" class="menu-item" @click="doDelete">{{ t('common.delete') }}</div>
+      </template>
     </div>
     <!-- 空白区域右键菜单：新建文件/新建文件夹/刷新（VSCode 资源管理器对齐） -->
     <div v-if="blankMenu" class="context-menu" :style="blankMenuStyle" @click="closeBlankMenu">

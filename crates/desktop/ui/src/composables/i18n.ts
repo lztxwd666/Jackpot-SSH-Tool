@@ -112,6 +112,12 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.remoteTitle': 'Remote Files',
     'hosts.groupUnassigned': 'Unassigned',
     'tree.transferLocked': 'Transferring files, file tree temporarily locked',
+    // 批量操作（多选右键菜单）
+    'tree.uploadN': 'Upload {n} items',
+    'tree.downloadN': 'Download {n} items',
+    'tree.deleteN': 'Delete {n} items',
+    'tree.deleteManyConfirm': 'Delete {n} items?',
+    'tree.deletedN': 'Deleted {n} items',
 
     // 输入对话框
     'prompt.folderName': 'Folder name:',
@@ -254,6 +260,12 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.remoteTitle': '远程文件',
     'hosts.groupUnassigned': '未分组',
     'tree.transferLocked': '正在传输文件，文件树暂时锁定',
+    // 批量操作（多选右键菜单）
+    'tree.uploadN': '上传 {n} 项',
+    'tree.downloadN': '下载 {n} 项',
+    'tree.deleteN': '删除 {n} 项',
+    'tree.deleteManyConfirm': '确定删除 {n} 项？',
+    'tree.deletedN': '已删除 {n} 项',
 
     // 输入对话框
     'prompt.folderName': '文件夹名称：',

@@ -63,3 +63,31 @@ export async function copyPath(path: string): Promise<boolean> {
     return false
   }
 }
+
+/** 拖拽载荷条目（路径 + 是否目录） */
+export interface DragItem {
+  path: string
+  isDir: boolean
+}
+
+/**
+ * 解析文件树拖拽 payload（两棵树共用）：
+ * 兼容三种格式——多选 { items: [{path,isDir}] } / 单选 { path, isDir } / 旧版纯路径字符串
+ */
+export function parseDragPayload(raw: string): DragItem[] {
+  if (!raw) return []
+  try {
+    const p = JSON.parse(raw)
+    if (Array.isArray(p.items)) {
+      return p.items
+        .filter((i: any) => i && typeof i.path === 'string')
+        .map((i: any) => ({ path: i.path, isDir: !!i.isDir }))
+    }
+    if (p && typeof p.path === 'string') {
+      return [{ path: p.path, isDir: !!p.isDir }]
+    }
+  } catch {
+    // 非 JSON：旧版纯路径
+  }
+  return [{ path: raw, isDir: false }]
+}
