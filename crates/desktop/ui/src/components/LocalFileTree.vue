@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
-import { formatFileSize, isValidNewName, resolveNameConflict, copyPath, parseDragPayload } from '../composables/fs'
+import { formatFileSize, isValidNewName, resolveNameConflict, copyPath, parseDragPayload, type DragItem } from '../composables/fs'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
 import FileTreeHeader from './FileTreeHeader.vue'
@@ -17,6 +17,8 @@ const props = defineProps<{ refreshKey: number }>()
 
 const emit = defineEmits<{
   (e: 'download', remotePath: string, localDir: string, isDir?: boolean): void
+  (e: 'download-many', items: DragItem[], localDir: string): void
+  (e: 'upload-many', items: DragItem[]): void
   (e: 'current-dir', path: string): void
   (e: 'upload-request', localPath: string, isDir?: boolean): void
 }>()
@@ -142,14 +144,17 @@ function onDrop(e: DragEvent) {
   // 仅信任本应用内拖拽（自定义 MIME）：外部 text/plain 载荷不可信（可被伪造注入路径）
   const raw = dt.getData(REMOTE_DRAG_TYPE)
   if (!raw) return
-  // 解析载荷（多选数组 / 单选对象 / 旧格式），逐项下载
-  for (const item of parseDragPayload(raw)) {
-    emit('download', item.path, currentPath.value, item.isDir)
+  // 解析载荷（多选数组 / 单选对象 / 旧格式）；批量一次投递，由 App.vue 串行执行
+  const items = parseDragPayload(raw)
+  if (items.length === 1) {
+    emit('download', items[0].path, currentPath.value, items[0].isDir)
+  } else {
+    emit('download-many', items, currentPath.value)
   }
 }
 
-// 单击交互（VSCode 多选参考）：Ctrl 点选切换 / Shift 范围选 / 普通单击单选
-// 普通单击目录保留"进入目录"行为（文件管理器风格）；Ctrl/Shift 仅选择不导航
+// 单击交互（VSCode 对齐）：Ctrl 点选切换 / Shift 范围选 / 普通单击仅选中
+// （文件夹不导航，进入目录由双击承担；多选文件夹自然可用）
 function onClickItem(e: MouseEvent, file: FileNode) {
   if (e.ctrlKey || e.metaKey) {
     if (selected.has(file.path)) selected.delete(file.path)
@@ -164,10 +169,10 @@ function onClickItem(e: MouseEvent, file: FileNode) {
   selected.clear()
   selected.add(file.path)
   anchor = file.path
-  if (file.is_dir) loadDir(file.path)
 }
 
 // Shift 范围选：从锚点到当前项之间的全部项（列表顺序）
+// anchor 在首次 Shift 点击（无锚点）时同样更新，否则后续 Shift 点击退化为单选
 function rangeSelect(path: string) {
   const paths = files.value.map(f => f.path)
   const cur = paths.indexOf(path)
@@ -175,6 +180,7 @@ function rangeSelect(path: string) {
   if (cur < 0 || anc < 0) {
     selected.clear()
     selected.add(path)
+    anchor = path
     return
   }
   const [start, end] = cur < anc ? [cur, anc] : [anc, cur]
@@ -182,12 +188,10 @@ function rangeSelect(path: string) {
   for (let i = start; i <= end; i++) selected.add(paths[i])
 }
 
-// 双击进入目录（保留；单击已处理选中）
+// 双击进入目录（VSCode 对齐：单击选中，双击进入）
 function enterDir(file: FileNode) {
-  if (file.is_dir) loadDir(file.path)
-  selected.clear()
-  selected.add(file.path)
-  anchor = file.path
+  if (!file.is_dir) return
+  loadDir(file.path)
 }
 
 function goUp() {
@@ -209,13 +213,13 @@ function onContextMenu(e: MouseEvent, file: FileNode) {
   showMenu.value = true
 }
 
-// 批量上传（多选）：逐项循环复用现有事件链（上传到本标签远程当前目录）
+// 批量上传（多选）：一次性投递批量事件，由 App.vue 串行执行
+// （逐项循环 emit 会并发发起，worker 单线程 transferring 互斥导致其余报 busy）
 function doUploadMany() {
   if (!menuTarget.value) return
   closeMenu()
-  for (const f of files.value) {
-    if (selected.has(f.path)) emit('upload-request', f.path, f.is_dir)
-  }
+  const items = files.value.filter(f => selected.has(f.path)).map(f => ({ path: f.path, isDir: f.is_dir }))
+  emit('upload-many', items)
 }
 
 // 批量删除（多选）：确认后逐项删除（彻底删除，无回收站，必须确认）

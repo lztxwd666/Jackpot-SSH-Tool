@@ -10,6 +10,7 @@ import SessionTab, { type SessionTabState, type TabNotice } from './components/S
 import { routeCoreEvent } from './composables/events'
 import { dialogState, closeDialog, confirmDialog, showToast, removeToast } from './composables/dialog'
 import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
+import { type DragItem } from './composables/fs'
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
 interface PingResult {
@@ -575,6 +576,19 @@ const cancelledTransfers = new Set<string>()
 // 校验中 toast（taskId → toast id）：传输完成进入校验时弹出绿色常驻提示，
 // 校验完成（成功/失败/取消）时移除，随后"已下载到"等结果 toast 同位置衔接
 const verifyingToasts: Record<string, number> = {}
+// 批量传输（多选）：逐项串行执行（worker 单线程 transferring 互斥，
+// 并发发起会报 transfer already in progress）；单文件失败不影响后续
+async function downloadMany(sessionId: string, items: DragItem[], localDir?: string) {
+  for (const item of items) {
+    await downloadFile(sessionId, item.path, localDir, item.isDir)
+  }
+}
+async function uploadMany(sessionId: string, remoteDir: string, items: DragItem[], expectedDir?: string) {
+  for (const item of items) {
+    await uploadFile(sessionId, remoteDir, item.path, expectedDir, item.isDir)
+  }
+}
+
 // 与后端 commands/sftp.rs 的 TransferProgress 结构对应
 interface TransferProgress {
   id: string
@@ -851,7 +865,9 @@ onBeforeUnmount(() => {
             @close="closeTab(tab.id)"
             @reconnect="reconnectTab(tab)"
             @download="(p: string, dir?: string, isDir?: boolean) => downloadFile(tab.sessionId, p, dir, isDir)"
+            @download-many="(items: DragItem[], dir?: string) => downloadMany(tab.sessionId, items, dir)"
             @upload="(dir: string, p: string, expectedDir?: string, isDir?: boolean) => uploadFile(tab.sessionId, dir, p, expectedDir, isDir)"
+            @upload-many="(items: DragItem[], dir: string, expectedDir?: string) => uploadMany(tab.sessionId, dir, items, expectedDir)"
           />
         </template>
       </div>

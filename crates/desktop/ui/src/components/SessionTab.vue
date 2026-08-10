@@ -5,6 +5,7 @@ import { ref } from 'vue'
 import Terminal from './Terminal.vue'
 import LocalFileTree from './LocalFileTree.vue'
 import RemoteFileTree from './RemoteFileTree.vue'
+import { type DragItem } from '../composables/fs'
 import { t } from '../composables/i18n'
 
 export interface SessionTabState {
@@ -40,7 +41,9 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'reconnect'): void
   (e: 'download', remotePath: string, localDir?: string, isDir?: boolean): void
+  (e: 'download-many', items: DragItem[], localDir?: string): void
   (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string, isDir?: boolean): void
+  (e: 'upload-many', items: DragItem[], remoteDir: string, expectedDir?: string): void
 }>()
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
@@ -62,6 +65,8 @@ function uploadFromLocal(localPath: string, isDir = false) {
       <LocalFileTree
         :refreshKey="localRefreshKey"
         @download="(p: string, dir: string, isDir?: boolean) => emit('download', p, dir, isDir)"
+        @download-many="(items: DragItem[], dir: string) => emit('download-many', items, dir)"
+        @upload-many="(items: DragItem[]) => emit('upload-many', items, remoteCurrentDir || '/', localCurrentDir)"
         @current-dir="(p: string) => localCurrentDir = p"
         @upload-request="uploadFromLocal"
       />
@@ -73,7 +78,9 @@ function uploadFromLocal(localPath: string, isDir = false) {
         :refreshKey="remoteRefreshKey"
         :locked="locked"
         @download="(p: string, isDir?: boolean) => emit('download', p, localCurrentDir, isDir)"
+        @download-many="(items: DragItem[]) => emit('download-many', items, localCurrentDir)"
         @upload="(dir: string, p: string, isDir?: boolean) => emit('upload', dir, p, localCurrentDir, isDir)"
+        @upload-many="(items: DragItem[], dir: string) => emit('upload-many', items, dir, localCurrentDir)"
         @current-dir="(p: string) => remoteCurrentDir = p"
       />
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
