@@ -435,7 +435,7 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--color-background-soft);
+  background: var(--color-panel);
   user-select: none;
   font-size: 0.8rem;
 }
@@ -464,11 +464,11 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 }
 
 .tree-node:hover {
-  background: var(--color-background-mute);
+  background: var(--color-panel-mute);
 }
 
 .tree-node.selected {
-  background: var(--color-border-hover);
+  background: var(--color-panel-selected);
 }
 
 .up-node {
@@ -502,7 +502,7 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 }
 
 .drag-over {
-  outline: 2px solid hsla(160, 100%, 37%, 1);
+  outline: 2px solid var(--color-accent);
   outline-offset: -2px;
   background: rgba(46, 160, 67, 0.08);
 }

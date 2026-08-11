@@ -446,7 +446,7 @@ watch(() => props.locked, (locked) => {
 <style scoped>
 .file-tree {
   display: flex; flex-direction: column; height: 100%;
-  background: var(--color-background-soft); border-left: 1px solid var(--color-border);
+  background: var(--color-panel); border-left: 1px solid var(--color-border);
   user-select: none; font-size: 0.8rem; position: relative;
 }
 .tree-body { flex: 1; overflow-y: auto; }
@@ -454,26 +454,26 @@ watch(() => props.locked, (locked) => {
   display: flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.5rem;
   cursor: pointer; white-space: nowrap;
 }
-.tree-node:hover { background: var(--color-background-mute); }
-.tree-node.selected { background: var(--color-border-hover); }
+.tree-node:hover { background: var(--color-panel-mute); }
+.tree-node.selected { background: var(--color-panel-selected); }
 .up-node { border-bottom: 1px solid var(--color-border); font-weight: 500; }
 .icon { flex-shrink: 0; width: 14px; height: 14px; }
 .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .size { font-size: 0.7rem; opacity: 0.5; flex-shrink: 0; white-space: nowrap; }
 .loading { padding: 0.5rem; opacity: 0.5; text-align: center; }
-.error { padding: 0.5rem; color: #e5534b; font-size: 0.75rem; text-align: center; }
+.error { padding: 0.5rem; color: var(--color-danger); font-size: 0.75rem; text-align: center; }
 .locked { pointer-events: none; opacity: 0.6; }
 .lock-banner {
   display: flex; align-items: center; justify-content: center; gap: 0.35rem;
   padding: 0.35rem 0.5rem; font-size: 0.72rem; text-align: center;
-  background: rgba(210, 153, 34, 0.15); color: #d29922;
+  background: rgba(209, 154, 102, 0.15); color: var(--color-warning);
   animation: banner-in 0.18s ease-out;
 }
 .lock-icon { width: 11px; height: 11px; flex-shrink: 0; animation: icon-pulse 1.6s ease-in-out infinite; }
 @keyframes banner-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
 @keyframes icon-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .drag-over {
-  outline: 2px solid hsla(160, 100%, 37%, 1);
+  outline: 2px solid var(--color-accent);
   outline-offset: -2px;
   background: rgba(46, 160, 67, 0.08);
 }
