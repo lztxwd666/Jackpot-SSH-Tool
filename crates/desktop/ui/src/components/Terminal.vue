@@ -80,7 +80,7 @@ onMounted(async () => {
       foreground: '#abb2bf',
       cursor: '#61afef', // 仓库未定义 terminalCursor 键，采用设计值（OneDark 蓝）
       cursorAccent: '#1e1e1e',
-      selectionBackground: '#abb2bf30',
+      selectionBackground: '#3e4451',
       black: '#3f4451',
       red: '#e05561',
       green: '#8cc265',

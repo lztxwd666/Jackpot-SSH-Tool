@@ -475,7 +475,7 @@ watch(() => props.locked, (locked) => {
 .drag-over {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
-  background: rgba(46, 160, 67, 0.08);
+  background: rgba(97, 175, 239, 0.08);
 }
 .context-menu {
   position: fixed; background: var(--color-background); border: 1px solid var(--color-border);

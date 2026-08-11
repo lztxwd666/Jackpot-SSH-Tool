@@ -504,7 +504,7 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 .drag-over {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
-  background: rgba(46, 160, 67, 0.08);
+  background: rgba(97, 175, 239, 0.08);
 }
 
 .context-menu {
