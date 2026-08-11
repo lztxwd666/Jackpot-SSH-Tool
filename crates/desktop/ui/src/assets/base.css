@@ -1,53 +1,27 @@
-/* color palette from <https://github.com/vuejs/theme> */
-:root {
-  --vt-c-white: #ffffff;
-  --vt-c-white-soft: #f8f8f8;
-  --vt-c-white-mute: #f2f2f2;
-
-  --vt-c-black: #181818;
-  --vt-c-black-soft: #222222;
-  --vt-c-black-mute: #282828;
-
-  --vt-c-indigo: #2c3e50;
-
-  --vt-c-divider-light-1: rgba(60, 60, 60, 0.29);
-  --vt-c-divider-light-2: rgba(60, 60, 60, 0.12);
-  --vt-c-divider-dark-1: rgba(84, 84, 84, 0.65);
-  --vt-c-divider-dark-2: rgba(84, 84, 84, 0.48);
-
-  --vt-c-text-light-1: var(--vt-c-indigo);
-  --vt-c-text-light-2: rgba(60, 60, 60, 0.66);
-  --vt-c-text-dark-1: var(--vt-c-white);
-  --vt-c-text-dark-2: rgba(235, 235, 235, 0.64);
-}
-
-/* semantic color variables for this project */
-:root {
-  --color-background: var(--vt-c-white);
-  --color-background-soft: var(--vt-c-white-soft);
-  --color-background-mute: var(--vt-c-white-mute);
-
-  --color-border: var(--vt-c-divider-light-2);
-  --color-border-hover: var(--vt-c-divider-light-1);
-
-  --color-heading: var(--vt-c-text-light-1);
-  --color-text: var(--vt-c-text-light-1);
-
-  --section-gap: 160px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-background: var(--vt-c-black);
-    --color-background-soft: var(--vt-c-black-soft);
-    --color-background-mute: var(--vt-c-black-mute);
-
-    --color-border: var(--vt-c-divider-dark-2);
-    --color-border-hover: var(--vt-c-divider-dark-1);
-
-    --color-heading: var(--vt-c-text-dark-1);
-    --color-text: var(--vt-c-text-dark-2);
-  }
+/* 主题变量（OneDark 蓝灰调，设计见 docs/superpowers/specs/2026-08-11-ui-theme-onedark-design.md）
+   分层：框架最暗 -> 主机栏 -> 文件树最亮；data-theme 机制预留后续主题切换（新增 :root[data-theme='x'] 覆盖块） */
+:root[data-theme='onedark'] {
+  /* 框架层（body / tab 栏 / 状态栏 / 弹窗 / 表单） */
+  --color-background: #1e2127;
+  --color-background-soft: #21252b;
+  --color-background-mute: #2c313a;
+  /* 面板层（文件树） */
+  --color-panel: #282c34;
+  --color-panel-mute: #2c313a;
+  --color-panel-selected: #3e4451;
+  /* 侧栏层（主机栏） */
+  --color-sidebar: #21252b;
+  /* 边框与文本 */
+  --color-border: #393f4a;
+  --color-border-hover: #4b5263;
+  --color-heading: #e6e6e6;
+  --color-text: #abb2bf;
+  --color-text-muted: #5c6370;
+  /* 强调与状态色 */
+  --color-accent: #61afef;
+  --color-success: #98c379;
+  --color-warning: #d19a66;
+  --color-danger: #e06c75;
 }
 
 *,
