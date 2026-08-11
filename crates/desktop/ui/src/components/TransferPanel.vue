@@ -53,7 +53,7 @@ function pct(t: TransferTask): number {
 .t-file { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.68rem; color: var(--color-text); opacity: 0.55; }
 .t-bar { flex: 2; height: 8px; background: var(--color-background-mute); border-radius: 4px; overflow: hidden; }
 .t-fill {
-  height: 100%; background: hsla(160, 100%, 37%, 1); border-radius: 4px;
+  height: 100%; background: var(--color-accent); border-radius: 4px;
   transition: width 0.2s;
 }
 .t-pct { width: 36px; text-align: right; color: var(--color-text); opacity: 0.8; }

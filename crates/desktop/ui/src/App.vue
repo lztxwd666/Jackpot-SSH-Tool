@@ -995,14 +995,14 @@ onBeforeUnmount(() => {
 .tab { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
 .tab.active { border-bottom-color: var(--color-background); background: var(--color-background-mute); }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; }
-.tab-dot.connected { background: hsla(160, 100%, 37%, 1); }
-.tab-dot.connecting, .tab-dot.reconnecting { background: #d29922; }
-.tab-dot.disconnected { background: #e5534b; }
+.tab-dot.connected { background: var(--color-success); }
+.tab-dot.connecting, .tab-dot.reconnecting { background: var(--color-warning); }
+.tab-dot.disconnected { background: var(--color-danger); }
 .tab-close { color: var(--color-text); opacity: 0.6; cursor: pointer; }
 .tab-close:hover { opacity: 1; }
 .tab-content { flex: 1; display: flex; overflow: hidden; }
 .status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; }
-.status-badge { font-size: 0.7rem; color: hsla(160, 100%, 37%, 1); }
+.status-badge { font-size: 0.7rem; color: var(--color-success); }
 /* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；border-left 分隔左右区域 */
 .right-area { display: flex; flex-direction: column; border-left: 1px solid var(--color-border); }
 /* 底部栏固定高度：滑出面板以其为 bottom 边界（不遮挡底部栏，用户反馈） */
@@ -1017,8 +1017,8 @@ onBeforeUnmount(() => {
 }
 .btn:hover { background: var(--color-background-mute); }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
-.btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
+.btn-primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent), black 12%); }
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal { background: var(--color-background); border: 1px solid var(--color-border); border-radius: 8px; padding: 1.5rem; min-width: 300px; box-shadow: 0 4px 24px rgba(0,0,0,0.3); }

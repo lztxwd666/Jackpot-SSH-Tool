@@ -129,8 +129,8 @@ function uploadFromLocal(localPath: string, isDir = false) {
 .notice-stack { border-bottom: 1px solid var(--color-border); }
 .status-banner { padding: 0.35rem 0.8rem; font-size: 0.78rem; display: flex; align-items: center; gap: 0.5rem; animation: banner-in 0.18s ease-out; }
 .status-banner.info { background: rgba(88, 166, 255, 0.1); color: var(--color-text); }
-.status-banner.warning { background: rgba(210, 153, 34, 0.12); color: #d29922; }
-.status-banner.error { background: rgba(229, 83, 75, 0.12); color: #e5534b; }
+.status-banner.warning { background: rgba(209, 154, 102, 0.12); color: var(--color-warning); }
+.status-banner.error { background: rgba(224, 108, 117, 0.12); color: var(--color-danger); }
 .notice-icon { width: 12px; height: 12px; flex-shrink: 0; animation: icon-pulse 1.6s ease-in-out infinite; }
 .notice-message { flex: 1; }
 @keyframes banner-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
@@ -147,7 +147,7 @@ function uploadFromLocal(localPath: string, isDir = false) {
   pointer-events: auto;
 }
 .terminal-overlay { flex-direction: column; gap: 0.6rem; }
-.overlay-title { color: #e5534b; font-weight: 600; }
+.overlay-title { color: var(--color-danger); font-weight: 600; }
 
 /* 本组件内按钮样式（App.vue scoped 样式不作用于此，Task 6 的 .btn-danger 同例） */
 .btn {
@@ -155,12 +155,12 @@ function uploadFromLocal(localPath: string, isDir = false) {
   background: var(--color-background); color: var(--color-text); cursor: pointer; font-size: 0.8rem;
 }
 .btn:hover { background: var(--color-background-mute); }
-.btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
-.btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
+.btn-primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent), black 12%); }
 
 .btn-danger {
-  padding: 0.3rem 0.7rem; border: 1px solid #e5534b; border-radius: 4px;
-  background: var(--color-background); color: #e5534b; cursor: pointer; font-size: 0.8rem;
+  padding: 0.3rem 0.7rem; border: 1px solid var(--color-danger); border-radius: 4px;
+  background: var(--color-background); color: var(--color-danger); cursor: pointer; font-size: 0.8rem;
 }
-.btn-danger:hover { background: #e5534b; color: #fff; }
+.btn-danger:hover { background: var(--color-danger); color: #fff; }
 </style>

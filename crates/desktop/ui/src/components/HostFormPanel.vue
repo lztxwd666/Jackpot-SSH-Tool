@@ -178,6 +178,6 @@ function submit() {
   background: var(--color-background); color: var(--color-text); cursor: pointer; font-size: 0.8rem;
 }
 .btn:hover { background: var(--color-background-mute); }
-.btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
-.btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
+.btn-primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent), black 12%); }
 </style>

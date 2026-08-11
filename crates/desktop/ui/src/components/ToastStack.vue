@@ -20,17 +20,17 @@ import { toasts } from '../composables/dialog'
   border: 1px solid var(--color-border); box-shadow: 0 2px 12px rgba(0,0,0,0.35);
   font-size: 0.8rem; max-width: 70vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.toast.success { border-color: hsla(160, 100%, 37%, 0.6); color: hsla(160, 100%, 37%, 1); }
-.toast.error { border-color: #e5534b; color: #e5534b; }
+.toast.success { border-color: rgba(152, 195, 121, 0.6); color: var(--color-success); }
+.toast.error { border-color: var(--color-danger); color: var(--color-danger); }
 .toast.warning {
-  border-color: #d29922; color: #d29922;
-  background: rgba(210, 153, 34, 0.12);
+  border-color: var(--color-warning); color: var(--color-warning);
+  background: rgba(209, 154, 102, 0.12);
   font-weight: 600;
 }
 /* 校验中（传输完成后的完整性校验阶段）：绿色常驻提示（duration 0，校验完由调用方移除） */
 .toast.verifying {
-  border-color: #2ea043; color: #2ea043;
-  background: rgba(46, 160, 67, 0.12);
+  border-color: var(--color-success); color: var(--color-success);
+  background: rgba(152, 195, 121, 0.12);
   font-weight: 600;
 }
 </style>
