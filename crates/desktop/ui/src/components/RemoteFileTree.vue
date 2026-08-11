@@ -7,6 +7,7 @@ import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
 import { useClearSelectionOnOutside } from '../composables/selection'
 import FileTreeHeader from './FileTreeHeader.vue'
+import FileIcon from './FileIcon.vue'
 import { t } from '../composables/i18n'
 
 // 自定义 MIME 类型：dragover 期间 getData() 不可读，只能读 types
@@ -393,8 +394,8 @@ watch(() => props.locked, (locked) => {
       <div v-if="loading" class="loading">{{ t('common.loading') }}</div>
       <div v-if="error" class="error">{{ error }}</div>
       <div v-if="currentPath !== '/'" class="tree-node up-node" @click="goUp">
-        <!-- 文件夹图标（琥珀色，SVG 无 emoji）：父目录 -->
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
+        <!-- 父目录图标：.. 不匹配任何目录名，回落默认文件夹图标 -->
+        <FileIcon name=".." is-dir class="icon" />
         <span class="name">..</span>
       </div>
       <div
@@ -408,9 +409,8 @@ watch(() => props.locked, (locked) => {
         @dragstart="onDragStart($event, f)"
         @contextmenu="onContextMenu($event, f)"
       >
-        <!-- 文件夹/文件图标（SVG 无 emoji，项目约定）：文件夹琥珀色、文件中性灰 -->
-        <svg v-if="f.is_dir" class="icon" viewBox="0 0 24 24" fill="none" stroke="#d29922" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2z" /></svg>
-        <svg v-else class="icon" viewBox="0 0 24 24" fill="none" stroke="#8b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+        <!-- 文件/文件夹类型图标：按扩展名/目录名解析（material 图标主题，来源见 assets/icons/material/LICENSE） -->
+        <FileIcon :name="f.name" :is-dir="f.is_dir" class="icon" />
         <span class="name">{{ f.name }}</span>
         <span v-if="!f.is_dir" class="size">{{ formatFileSize(f.size) }}</span>
       </div>
