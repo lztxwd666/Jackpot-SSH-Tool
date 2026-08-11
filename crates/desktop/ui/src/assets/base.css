@@ -24,6 +24,29 @@
   --color-danger: #e06c75;
 }
 
+/* 滚动条（基础组件样式，不随主题切换）：窄条 + 半透明中性滑块（VSCode 同款视觉）。
+   中性灰在暗色与亮色背景下均可辨识，因此不挂到主题变量上，任何主题下表现一致 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(121, 121, 121, 0.4);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(121, 121, 121, 0.7);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 *,
 *::before,
 *::after {
