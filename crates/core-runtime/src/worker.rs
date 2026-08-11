@@ -268,8 +268,9 @@ struct Worker {
     // 传输栈弹出（其局部 ssh2::File drop 会解引用 session，提前释放即 use-after-free）
     pending_disconnect: Option<String>,
     pending_close: bool,
-    // USERAUTH_BANNER 已注入标志：横幅在认证期间到达（RFC 4252 §5.4），终端此时
-    // 尚未创建，于首个 shell 通道打开时注入为该通道首批数据；多次 open_shell 不得重复注入
+    // USERAUTH_BANNER 已注入标志：认证横幅在认证期间到达（RFC 4252 §5.4，
+    // libssh2 经 userauth_banner 读取，区别于 session.banner 的版本标识），
+    // 终端此时尚未创建，于首个 shell 通道打开时注入；多次 open_shell 不得重复注入
     banner_injected: bool,
 }
 
@@ -490,13 +491,14 @@ impl Worker {
 
         // USERAUTH_BANNER（RFC 4252 §5.4）：服务器认证期间发送的横幅（欢迎/法律声明），
         // 客户端应显示；终端在连接后才创建，认证时无显示载体，故于首个 shell 通道打开时
-        // 注入为该通道首批数据（显示于终端顶部、motd 之前，与真实 SSH 客户端观感一致）
+        // 注入为该通道首批数据（显示于终端顶部、motd 之前）。注意用 userauth_banner
+        // 而非 session.banner——后者是协议版本标识（SSH-2.0-...），不是认证横幅
         if ctype == ChannelType::Shell && !self.banner_injected {
             let banner = self
                 .connection
                 .as_ref()
                 .and_then(|c| c.session())
-                .and_then(|s| s.banner())
+                .and_then(|s| s.userauth_banner().ok().flatten())
                 .filter(|b| !b.is_empty());
             if let Some(banner) = banner {
                 self.banner_injected = true;
