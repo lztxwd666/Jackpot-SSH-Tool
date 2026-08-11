@@ -73,9 +73,30 @@ onMounted(async () => {
   term = new Terminal({
     cursorBlink: true,
     fontSize: 14,
+    // 终端配色独立于界面主题（OneDark ANSI 色板，实测自 Binaryify/OneDark-Pro，MIT）
+    // 背景固定经典黑底 #1e1e1e，不随界面主题切换；其余色值为仓库实测值
     theme: {
-      background: '#1e1e1e',
-      foreground: '#d4d4d4',
+      background: '#1e1e1e', // 经典黑底固定，不随主题切换
+      foreground: '#abb2bf',
+      cursor: '#61afef', // 仓库未定义 terminalCursor 键，采用设计值（OneDark 蓝）
+      cursorAccent: '#1e1e1e',
+      selectionBackground: '#abb2bf30',
+      black: '#3f4451',
+      red: '#e05561',
+      green: '#8cc265',
+      yellow: '#d18f52',
+      blue: '#4aa5f0',
+      magenta: '#c162de',
+      cyan: '#42b3c2',
+      white: '#d7dae0',
+      brightBlack: '#4f5666',
+      brightRed: '#ff616e',
+      brightGreen: '#a5e075',
+      brightYellow: '#f0a45d',
+      brightBlue: '#4dc4ff',
+      brightMagenta: '#de73ff',
+      brightCyan: '#4cd1e0',
+      brightWhite: '#e6e6e6',
     },
   })
   fitAddon = new FitAddon()
