@@ -23,6 +23,22 @@ let disposed = false
 // 会话结束标记：shell EOF 远端关闭通道（Closed 事件）后停止发送输入并显示提示
 // （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
 let ended = false
+// 挂载前数据缓冲：core-event 监听在组件创建时注册（setup 顶层，早于 onMounted），
+// 消除竞态窗口——motd 等登录横幅在 shell 打开后立即到达，若等 onMounted 再注册
+// 监听，数据 dispatch 时无消费者被丢弃（stdout 正常但最早的横幅丢失）。
+// term 未就绪（xterm 尚未 open）前的数据先缓存，就绪后回放
+const pendingData: Uint8Array[] = []
+let termReady = false
+
+function writeBytes(bytes: Uint8Array) {
+  if (termReady) term.write(bytes)
+  else pendingData.push(bytes)
+}
+
+function flushPending() {
+  for (const d of pendingData) term.write(d)
+  pendingData.length = 0
+}
 
 // 终端右键菜单（MobaXterm 风格：复制/粘贴/清屏）
 // 复制项在无选中文本时禁用（xterm selection 状态跟踪）
@@ -69,6 +85,35 @@ function doClear() {
   term.clear()
 }
 
+// 组件创建即注册 core-event 监听（Tauri listen 本地同步注册，调用后回调立即生效；
+// 不等 onMounted：会话数据在 shell 打开后立即开始流动，等挂载再注册会丢最早的横幅）
+void listen<any>('core-event', (event) => {
+  try {
+    // payload 为后端 emit 的事件对象（Tauri 已序列化传输，无需二次 parse）
+    const parsed = event.payload
+    if (parsed.type === 'Channel' && parsed.payload.kind === 'DataReceived') {
+      if (parsed.payload.detail.channel_id === props.channelId) {
+        // data 为 base64 编码的字节串（后端 serde_with::base64）
+        const b64 = parsed.payload.detail.data as string
+        const bin = atob(b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        writeBytes(bytes)
+      }
+    } else if (parsed.type === 'Channel' && parsed.payload.kind === 'Closed') {
+      // 本通道已关闭（远端 exit 触发 EOF）：停止输入并显示提示（终端内文本，非 UI 字符串）
+      if (parsed.payload.detail.channel_id === props.channelId && !ended) {
+        ended = true
+        writeBytes(new TextEncoder().encode('\r\n\x1b[33m[Session ended]\x1b[0m\r\n'))
+      }
+    }
+  } catch (_) { }
+}).then((fn) => {
+  // 注册完成时组件可能已卸载（旧通道被 :key 重建）：立即解绑，防监听器泄漏
+  unlisten = fn
+  if (disposed) fn()
+})
+
 onMounted(async () => {
   term = new Terminal({
     cursorBlink: true,
@@ -103,6 +148,9 @@ onMounted(async () => {
   fitAddon = new FitAddon()
   term.loadAddon(fitAddon)
   term.open(terminalRef.value!)
+  // xterm 就绪：回放挂载前缓冲的早期数据（登录横幅等）
+  termReady = true
+  flushPending()
 
   // 选中状态跟踪（右键菜单"复制"项禁用态）
   term.onSelectionChange(() => {
@@ -130,36 +178,6 @@ onMounted(async () => {
       cols: term.cols,
       rows: term.rows,
     }).catch(() => { })
-  }
-
-  unlisten = await listen<any>('core-event', (event) => {
-    try {
-      // payload 为后端 emit 的事件对象（Tauri 已序列化传输，无需二次 parse）
-      const parsed = event.payload
-      if (parsed.type === 'Channel' && parsed.payload.kind === 'DataReceived') {
-        if (parsed.payload.detail.channel_id === props.channelId) {
-          // data 为 base64 编码的字节串（后端 serde_with::base64）
-          const b64 = parsed.payload.detail.data as string
-          const bin = atob(b64)
-          const bytes = new Uint8Array(bin.length)
-          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-          term.write(bytes)
-        }
-      } else if (parsed.type === 'Channel' && parsed.payload.kind === 'Closed') {
-        // 本通道已关闭（远端 exit 触发 EOF）：停止输入并显示提示（终端内文本，非 UI 字符串）
-        if (parsed.payload.detail.channel_id === props.channelId && !ended) {
-          ended = true
-          term.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n')
-        }
-      }
-    } catch (_) { }
-  })
-
-  // await listen 期间组件可能已卸载（旧通道被 :key 重建）：解绑监听器并中止初始化
-  if (disposed) {
-    unlisten()
-    term.dispose()
-    return
   }
 
   term.onData((data) => {
