@@ -169,7 +169,7 @@ function onSearchInput(e: Event) {
 
 <style scoped>
 /* 主机栏整体：右侧区域内的上半部分（flex:1 上下贯通）；左右分隔线由 right-area 的 border-left 承担 */
-.host-panel { width: 220px; min-width: 220px; background: var(--color-background-soft); display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.host-panel { width: 220px; min-width: 220px; background: var(--color-sidebar); display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--color-border); }
 .sidebar-header h2 { font-size: 0.95rem; color: var(--color-heading); }
 .search-bar { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--color-border); }
@@ -187,7 +187,7 @@ function onSearchInput(e: Event) {
 /* 收藏星标：未收藏弱显示（悬停变亮），收藏金色高亮 */
 .star { width: 13px; height: 13px; flex-shrink: 0; color: var(--color-text); opacity: 0.25; cursor: pointer; transition: opacity 0.15s; }
 .star:hover { opacity: 0.9; }
-.star.active { opacity: 1; color: #d29922; fill: #d29922; }
+.star.active { opacity: 1; color: var(--color-warning); fill: var(--color-warning); }
 
 /* context-menu 沿用 RemoteFileTree 样式；删除项红色警示 */
 .context-menu {
@@ -196,7 +196,7 @@ function onSearchInput(e: Event) {
 }
 .menu-item { padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
 .menu-item:hover { background: var(--color-background-mute); }
-.menu-item.danger { color: #e5534b; }
+.menu-item.danger { color: var(--color-danger); }
 
 /* 悬停信息卡：与 context-menu 同风格浮层；pointer-events none 保证不干扰鼠标悬停切换 */
 .host-tip {
@@ -217,6 +217,6 @@ function onSearchInput(e: Event) {
   background: var(--color-background); color: var(--color-text); cursor: pointer; font-size: 0.8rem;
 }
 .btn:hover { background: var(--color-background-mute); }
-.btn-primary { background: hsla(160, 100%, 37%, 1); color: #fff; border-color: hsla(160, 100%, 37%, 1); }
-.btn-primary:hover { background: hsla(160, 100%, 30%, 1); }
+.btn-primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
+.btn-primary:hover { background: color-mix(in srgb, var(--color-accent), black 12%); }
 </style>
