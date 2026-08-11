@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Terminal } from 'xterm'
 import { FitAddon } from '@xterm/addon-fit'
-import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { registerChannelSink, unregisterChannelSink } from '../composables/channelData'
 import { showToast } from '../composables/dialog'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
@@ -14,7 +14,6 @@ const props = defineProps<{ channelId: string }>()
 const terminalRef = ref<HTMLDivElement>()
 let term: Terminal
 let fitAddon: FitAddon
-let unlisten: () => void
 let observer: ResizeObserver
 let resizeTimer: number | undefined
 // 卸载标记：await listen 期间组件可能被卸载（重连 :key 重建），
@@ -85,33 +84,17 @@ function doClear() {
   term.clear()
 }
 
-// 组件创建即注册 core-event 监听（Tauri listen 本地同步注册，调用后回调立即生效；
-// 不等 onMounted：会话数据在 shell 打开后立即开始流动，等挂载再注册会丢最早的横幅）
-void listen<any>('core-event', (event) => {
-  try {
-    // payload 为后端 emit 的事件对象（Tauri 已序列化传输，无需二次 parse）
-    const parsed = event.payload
-    if (parsed.type === 'Channel' && parsed.payload.kind === 'DataReceived') {
-      if (parsed.payload.detail.channel_id === props.channelId) {
-        // data 为 base64 编码的字节串（后端 serde_with::base64）
-        const b64 = parsed.payload.detail.data as string
-        const bin = atob(b64)
-        const bytes = new Uint8Array(bin.length)
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-        writeBytes(bytes)
-      }
-    } else if (parsed.type === 'Channel' && parsed.payload.kind === 'Closed') {
-      // 本通道已关闭（远端 exit 触发 EOF）：停止输入并显示提示（终端内文本，非 UI 字符串）
-      if (parsed.payload.detail.channel_id === props.channelId && !ended) {
-        ended = true
-        writeBytes(new TextEncoder().encode('\r\n\x1b[33m[Session ended]\x1b[0m\r\n'))
-      }
-    }
-  } catch (_) { }
-}).then((fn) => {
-  // 注册完成时组件可能已卸载（旧通道被 :key 重建）：立即解绑，防监听器泄漏
-  unlisten = fn
-  if (disposed) fn()
+// 组件创建即注册通道写入器：数据由 App.vue 全局监听器统一分发（应用启动即注册，
+// 无竞态窗口），组件创建前到达的早期数据（motd 等登录横幅）在 channelData 缓冲，
+// 注册时回放；term 未就绪前 sink 内部继续缓冲，xterm open 后写入
+registerChannelSink(props.channelId, {
+  onData: writeBytes,
+  onClosed: () => {
+    // 本通道已关闭（远端 exit 触发 EOF）：停止输入并显示提示（终端内文本，非 UI 字符串）
+    if (ended) return
+    ended = true
+    writeBytes(new TextEncoder().encode('\r\n\x1b[33m[Session ended]\x1b[0m\r\n'))
+  },
 })
 
 onMounted(async () => {
@@ -200,9 +183,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   disposed = true
+  unregisterChannelSink(props.channelId)
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
   observer?.disconnect()
-  unlisten?.()
   term?.dispose()
 })
 </script>

@@ -8,6 +8,7 @@ import TransferPanel from './components/TransferPanel.vue'
 import ToastStack from './components/ToastStack.vue'
 import SessionTab, { type SessionTabState, type TabNotice } from './components/SessionTab.vue'
 import { routeCoreEvent } from './composables/events'
+import { dispatchChannelData, dispatchChannelClosed } from './composables/channelData'
 import { dialogState, closeDialog, confirmDialog, showToast, removeToast } from './composables/dialog'
 import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
 import { type DragItem } from './composables/fs'
@@ -777,6 +778,24 @@ onMounted(async () => {
   unlistenCore = await listen<any>('core-event', (event) => {
     // 后端直接 emit 事件对象（Tauri 序列化一次），payload 已是解析后对象，无需二次 parse
     const parsed = event.payload
+    // 通道数据/关闭事件：分发给 Terminal 组件注册的写入器（应用级监听器启动即注册，
+    // 无竞态——组件创建前的早期数据在 channelData 缓冲，注册时回放；
+    // motd 等登录横幅在 shell 打开瞬间发出，早于前端渲染，此前因无消费者丢失）
+    if (parsed.type === 'Channel') {
+      const kind = parsed.payload?.kind
+      const detail = parsed.payload?.detail
+      if (kind === 'DataReceived' && detail?.channel_id) {
+        // data 为 base64 编码的字节串（后端 serde_with::base64）
+        const b64 = detail.data as string
+        const bin = atob(b64)
+        const bytes = new Uint8Array(bin.length)
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+        dispatchChannelData(detail.channel_id, bytes)
+      } else if (kind === 'Closed' && detail?.channel_id) {
+        dispatchChannelClosed(detail.channel_id)
+      }
+      return
+    }
     // 非会话级事件（不带 session_id）：仍在本地处理
     if (parsed.type === 'Host') loadHosts()
     // 主机密钥确认流程：Unknown（首次）/ Changed（变更）
