@@ -1318,8 +1318,8 @@ impl Worker {
                 }
             }
         }
-        // stderr 流读取：motd/Last login 等 PAM 会话横幅经 sshd 发送到通道 stderr，
-        // 真实终端将 stderr 与 stdout 同屏显示；此前只读 stdout 导致登录横幅缺失。
+        // stderr 流读取：部分程序（TUI 报错、脚本提示等）将输出写入通道 stderr，
+        // 真实终端将 stderr 与 stdout 同屏显示；此前只读 stdout 导致 stderr 数据被丢弃。
         // stderr 的 EOF 不代表通道关闭（stdout 可能仍活跃），仅置标志停止本流读取。
         // 重新取通道（与 stdout 分开作用域，避免 dispatch 与通道可变借用互斥）
         let inner = match self.raw_channels.get_mut(&channel) {
