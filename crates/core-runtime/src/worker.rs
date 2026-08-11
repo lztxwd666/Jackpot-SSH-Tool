@@ -1275,14 +1275,15 @@ impl Worker {
                     }));
                 }
                 Err(e) => {
-                    if crate::ssh::is_would_block(&e) {
-                        return Ok(()); // EAGAIN：无事
+                    if !crate::ssh::is_would_block(&e) {
+                        // 真实读错误：连接已死，主动断开并广播（原因供 UI 展示）
+                        let msg = format!("channel read failed: {e}");
+                        tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell read failed, disconnecting");
+                        self.disconnect_inner(&msg);
+                        return Err(CoreError::Internal(msg));
                     }
-                    // 真实读错误：连接已死，主动断开并广播（原因供 UI 展示）
-                    let msg = format!("channel read failed: {e}");
-                    tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell read failed, disconnecting");
-                    self.disconnect_inner(&msg);
-                    return Err(CoreError::Internal(msg));
+                    // EAGAIN：stdout 暂无数据，不提前返回——必须落到下方 stderr 读取，
+                    // 否则 stderr 流（motd 等）只在 stdout 同轮有数据时才会被读到
                 }
             }
         }
