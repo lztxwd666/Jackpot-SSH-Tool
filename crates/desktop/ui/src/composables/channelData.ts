@@ -13,7 +13,10 @@ interface ChannelSink {
 /** 已注册的通道写入器（Terminal 组件存活期间注册） */
 const sinks = new Map<string, ChannelSink>()
 /** 组件创建前的早期数据缓冲（每通道），写入器注册时回放并清空 */
-const pending = new Map<string, { data: Uint8Array[]; closed: boolean }>()
+const pending = new Map<string, { data: Uint8Array[]; closed: boolean; bytes: number }>()
+// 缓冲上限：早期数据只应是登录横幅等小体积内容（毫秒级渲染窗口）；
+// 数据来自不可信服务器，防其在终端创建前灌入大流量拖垮内存（超出丢弃最旧，保住最新）
+const PENDING_LIMIT = 64 * 1024
 
 /** 注册通道写入器并回放缓冲的早期数据（组件创建时调用） */
 export function registerChannelSink(channelId: string, sink: ChannelSink): void {
@@ -40,10 +43,15 @@ export function dispatchChannelData(channelId: string, bytes: Uint8Array): void 
   } else {
     let buf = pending.get(channelId)
     if (!buf) {
-      buf = { data: [], closed: false }
+      buf = { data: [], closed: false, bytes: 0 }
       pending.set(channelId, buf)
     }
     buf.data.push(bytes)
+    buf.bytes += bytes.length
+    while (buf.bytes > PENDING_LIMIT && buf.data.length > 1) {
+      buf.bytes -= buf.data[0].length
+      buf.data.shift()
+    }
   }
 }
 
@@ -55,7 +63,7 @@ export function dispatchChannelClosed(channelId: string): void {
   } else {
     let buf = pending.get(channelId)
     if (!buf) {
-      buf = { data: [], closed: false }
+      buf = { data: [], closed: false, bytes: 0 }
       pending.set(channelId, buf)
     }
     buf.closed = true
