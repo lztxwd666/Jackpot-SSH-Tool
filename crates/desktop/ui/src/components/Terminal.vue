@@ -204,16 +204,23 @@ onBeforeUnmount(() => {
 .terminal-container {
   width: 100%;
   height: 100%;
-  /* 内容与左右分隔线留白（字符不再贴文件树边框）；xterm fit 会自动扣除容器 padding 计算行列 */
-  padding: 0 10px;
+  /* 终端面板背景延伸到容器边缘：字符与边框之间的留白区与终端同色
+     （而非露出外层框架色形成"挖缝"），整体呈完整深色面板 */
+  background: #23272e;
 }
 
 .terminal-container :deep(.xterm) {
   height: 100%;
+  /* 内容四周统一内边距（参照文件树行内边距惯例）：fit 读取 .xterm 自身
+     padding 扣除后计算行列，字符与面板边缘留白一致，不会溢出 */
+  padding: 8px;
 }
 
 .terminal-container :deep(.xterm-viewport) {
   overflow-y: auto;
+  /* 滚动条区背景透明：xterm 默认给滚动条预留 14px 且 viewport 背景为不透明黑，
+     改透明后该区域与面板背景同色，滚动条浮层呈"隔离在右侧"而非覆盖在文本上 */
+  background-color: transparent;
 }
 
 /* 终端右键菜单（与文件树/主机栏 context-menu 同风格） */
