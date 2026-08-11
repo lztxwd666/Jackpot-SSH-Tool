@@ -5,6 +5,7 @@ import { confirmDialog, promptDialog, showToast } from '../composables/dialog'
 import { formatFileSize, isValidNewName, resolveNameConflict, copyPath, parseDragPayload, type DragItem } from '../composables/fs'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
+import { useClearSelectionOnOutside } from '../composables/selection'
 import FileTreeHeader from './FileTreeHeader.vue'
 import { t } from '../composables/i18n'
 
@@ -65,6 +66,20 @@ function closeBlankMenu() { blankMenu.value = null }
 // 菜单打开时注册全局点击关闭（点击菜单外任意处消除菜单，标准交互）
 useClickOutsideClose(showMenu, closeMenu)
 useClickOutsideClose(blankMenu, closeBlankMenu)
+// 失焦清除选区：点击文件树外部（终端/主机栏等）取消选中（VSCode 行为）
+useClearSelectionOnOutside(() => {
+  selected.clear()
+  anchor = null
+}, '.file-tree')
+
+// 点击文件树内部：空白区域（未命中节点）同样清除选区
+function onTreeClick(e: MouseEvent) {
+  closeMenu()
+  if (!(e.target as HTMLElement).closest('.tree-node')) {
+    selected.clear()
+    anchor = null
+  }
+}
 const loaded = ref(false)
 const dragOver = ref(false)  // 拖拽悬停高亮
 
@@ -356,7 +371,7 @@ watch(() => props.locked, (locked) => {
 </script>
 
 <template>
-  <div class="file-tree" :class="{ 'drag-over': dragOver, 'locked': locked }" @drop.prevent="onDrop" @dragenter="onDragenter" @dragover="onDragover" @dragleave="onDragLeave" @click="closeMenu">
+  <div class="file-tree" :class="{ 'drag-over': dragOver, 'locked': locked }" @drop.prevent="onDrop" @dragenter="onDragenter" @dragover="onDragover" @dragleave="onDragLeave" @click="onTreeClick">
     <!-- VSCode EXPLORER 样式标题栏：标题居左，悬停显示新建文件/文件夹/刷新 -->
     <FileTreeHeader :title="t('tree.remoteTitle')" @new-file="doNewFile" @new-folder="doNewFolder" @refresh="refresh" />
     <!-- 锁定提示：锁图标 + 脉冲动画（与 SessionTab 状态条风格统一，SVG 无 emoji） -->

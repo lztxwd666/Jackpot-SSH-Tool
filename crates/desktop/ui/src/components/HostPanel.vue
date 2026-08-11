@@ -33,6 +33,7 @@ const emit = defineEmits<{
   (e: 'edit', host: Host): void
   (e: 'ping', host: Host): void
   (e: 'delete', host: Host): void
+  (e: 'toggle-favorite', host: Host): void
   (e: 'new'): void
   (e: 'search', query: string): void
 }>()
@@ -69,12 +70,16 @@ function authLabel(authType: string): string {
 }
 
 // 按分组组织主机列表：[分组名, 组内主机] 数组；空分组名归入"未分组"标题
+// 组内收藏主机置顶（成熟客户端惯例：收藏优先展示，与星标视觉呼应）
 const groupedHosts = computed(() => {
   const groups = new Map<string, Host[]>()
   for (const host of props.hosts) {
     const key = host.group_name || ''
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key)!.push(host)
+  }
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => Number(b.favorite) - Number(a.favorite))
   }
   return Array.from(groups.entries())
 })
@@ -123,7 +128,18 @@ function onSearchInput(e: Event) {
             @mouseenter="showTip($event, host)"
             @mouseleave="hideTip"
             @contextmenu="onContextMenu($event, host)">
-            <span class="host-name">{{ host.name }}</span>
+            <span class="host-main">
+              <span class="host-name">{{ host.name }}</span>
+              <!-- 收藏星标（SVG 无 emoji）：点击切换收藏，不触发行其他操作；
+                   收藏金色高亮，未收藏弱显示（成熟客户端惯例） -->
+              <svg class="star" :class="{ active: host.favorite }"
+                :title="host.favorite ? t('hosts.unfavorite') : t('form.favorite')"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                stroke-linecap="round" stroke-linejoin="round"
+                @click.stop="emit('toggle-favorite', host)">
+                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" />
+              </svg>
+            </span>
             <span class="host-addr">{{ host.address }}:{{ host.port }}</span>
           </li>
         </ul>
@@ -165,8 +181,13 @@ function onSearchInput(e: Event) {
 .host-list ul li { padding: 0.5rem 0.8rem; cursor: pointer; border-bottom: 1px solid var(--color-border); }
 .host-list ul li:hover { background: var(--color-background-mute); }
 .host-list ul li.active { background: var(--color-border-hover); }
-.host-name { display: block; font-weight: 600; color: var(--color-heading); font-size: 0.85rem; }
+.host-main { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; min-width: 0; }
+.host-name { font-weight: 600; color: var(--color-heading); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .host-addr { font-size: 0.7rem; color: var(--color-text); opacity: 0.7; }
+/* 收藏星标：未收藏弱显示（悬停变亮），收藏金色高亮 */
+.star { width: 13px; height: 13px; flex-shrink: 0; color: var(--color-text); opacity: 0.25; cursor: pointer; transition: opacity 0.15s; }
+.star:hover { opacity: 0.9; }
+.star.active { opacity: 1; color: #d29922; fill: #d29922; }
 
 /* context-menu 沿用 RemoteFileTree 样式；删除项红色警示 */
 .context-menu {

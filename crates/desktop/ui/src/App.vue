@@ -556,6 +556,23 @@ async function onPing(host: Host) {
   }
 }
 
+// 切换收藏（星标点击）：save_host 持久化并同步本地列表
+async function onToggleFavorite(host: Host) {
+  const updated: Host = { ...host, favorite: !host.favorite }
+  try {
+    await invoke('save_host', {
+      host: {
+        id: updated.id, name: updated.name, address: updated.address, port: updated.port,
+        username: updated.username, auth_type: updated.auth_type, group_name: updated.group_name,
+        favorite: updated.favorite, notes: updated.notes, save_password: updated.save_password,
+        created_at: updated.created_at, updated_at: new Date().toISOString(),
+      },
+    })
+    const idx = hosts.value.findIndex(h => h.id === updated.id)
+    if (idx >= 0) hosts.value[idx] = updated
+  } catch (e) { console.error('Toggle favorite failed:', e) }
+}
+
 // 用户主目录（下载兜底目标）
 const homeDir = ref('')
 
@@ -887,6 +904,7 @@ onBeforeUnmount(() => {
         @edit="openEditPanel"
         @ping="onPing"
         @delete="onDeleteHost"
+        @toggle-favorite="onToggleFavorite"
         @new="openNewPanel"
         @search="onSearch"
       />

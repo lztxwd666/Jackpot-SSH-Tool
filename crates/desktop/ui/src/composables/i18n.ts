@@ -111,6 +111,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.localTitle': 'Local Files',
     'tree.remoteTitle': 'Remote Files',
     'hosts.groupUnassigned': 'Unassigned',
+    'hosts.unfavorite': 'Unfavorite',
     'tree.transferLocked': 'Transferring files, file tree temporarily locked',
     // 批量操作（多选右键菜单）
     'tree.uploadN': 'Upload {n} items',
@@ -259,6 +260,7 @@ const messages: Record<Locale, Record<string, string>> = {
     'tree.localTitle': '本地文件',
     'tree.remoteTitle': '远程文件',
     'hosts.groupUnassigned': '未分组',
+    'hosts.unfavorite': '取消收藏',
     'tree.transferLocked': '正在传输文件，文件树暂时锁定',
     // 批量操作（多选右键菜单）
     'tree.uploadN': '上传 {n} 项',
