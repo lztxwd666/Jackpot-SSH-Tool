@@ -869,6 +869,11 @@ impl Worker {
         // 枚举远程目录树（含空目录项）
         let mut entries = Vec::new();
         self.collect_remote_entries(remote_dir, "", &mut entries)?;
+        // 空目录：本地创建根目录（无条目时循环不执行，必须显式创建）
+        if entries.is_empty() {
+            std::fs::create_dir_all(local_dir)
+                .map_err(|e| CoreError::Internal(format!("create local dir failed: {e}")))?;
+        }
         let total: u64 = entries.iter().filter(|e| !e.3).map(|e| e.2).sum();
         let mut done: u64 = 0;
         for (remote, rel, _size, is_dir) in entries {
@@ -887,7 +892,15 @@ impl Worker {
                 std::fs::create_dir_all(parent)
                     .map_err(|e| CoreError::Internal(format!("create local dir failed: {e}")))?;
             }
-            let n = self.transfer_one_download(&remote, &local.to_string_lossy(), |_d, _t| {})?;
+            let local_str = local.to_string_lossy().to_string();
+            let n = match self.transfer_one_download(&remote, &local_str, |_d, _t| {}) {
+                Ok(n) => n,
+                Err(e) => {
+                    // 失败清理当前文件半成品（与单文件下载路径行为一致）
+                    let _ = std::fs::remove_file(&local_str);
+                    return Err(e);
+                }
+            };
             done += n;
             let _ = progress.send((done, total, rel));
         }
@@ -906,6 +919,8 @@ impl Worker {
         // 枚举本地目录树（含空目录项）
         let mut entries = Vec::new();
         self.collect_local_entries(std::path::Path::new(local_dir), "", &mut entries)?;
+        // 目标根目录必须存在：先创建（已存在容忍），否则顶层文件 create 报父目录缺失
+        self.sftp_mkdir_tolerant(remote_dir)?;
         let total: u64 = entries.iter().filter(|e| !e.3).map(|e| e.2).sum();
         let mut done: u64 = 0;
         for (local, rel, _size, is_dir) in entries {
@@ -914,10 +929,8 @@ impl Worker {
             }
             let remote = format!("{}/{}", remote_dir.trim_end_matches('/'), rel);
             if is_dir {
-                // 远端创建目录（已存在时 mkdir 失败，容忍：目录结构已就绪）
-                let _ = sftp_retry_io(&mut self.raw_channels, &self.cancel, "mkdir", |sftp| {
-                    sftp.mkdir(std::path::Path::new(&remote), 0o755)
-                });
+                // 远端创建目录（已存在容忍）
+                self.sftp_mkdir_tolerant(&remote)?;
                 continue;
             }
             let n = self.transfer_one_upload(&remote, &local, |_d, _t| {})?;
@@ -927,7 +940,28 @@ impl Worker {
         Ok(done)
     }
 
+    /// 创建远端目录，已存在时容忍（stat 确认），其他错误传播
+    fn sftp_mkdir_tolerant(&mut self, path: &str) -> CoreResult<()> {
+        let mk = sftp_retry_io(&mut self.raw_channels, &self.cancel, "mkdir", |sftp| {
+            sftp.mkdir(std::path::Path::new(path), 0o755)
+        });
+        if mk.is_ok() {
+            return Ok(());
+        }
+        // mkdir 失败：stat 确认目标已存在（目录结构已就绪则容忍，否则传播原错误）
+        let exists = sftp_retry_io(&mut self.raw_channels, &self.cancel, "stat", |sftp| {
+            sftp.stat(std::path::Path::new(path))
+        })
+        .map(|s| s.is_dir())
+        .unwrap_or(false);
+        if exists {
+            return Ok(());
+        }
+        mk
+    }
+
     /// 递归枚举远程目录：条目为 (远程路径, 相对路径, 大小, 是否目录)
+    /// 符号链接跳过（不跟随，防循环与目录误传）；每轮检查取消标志（大目录枚举可中断）
     fn collect_remote_entries(
         &mut self,
         dir: &str,
@@ -938,6 +972,13 @@ impl Worker {
             sftp.readdir(std::path::Path::new(dir))
         })?;
         for (p, stat) in entries {
+            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(CoreError::Internal("transfer cancelled".into()));
+            }
+            // 符号链接跳过（file_type 不跟随，防循环与目录误传）
+            if matches!(stat.file_type(), ssh2::FileType::Symlink) {
+                continue;
+            }
             let name = p
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -963,6 +1004,7 @@ impl Worker {
     }
 
     /// 递归枚举本地目录：条目为 (本地路径, 相对路径, 大小, 是否目录)
+    /// 符号链接跳过（file_type 不跟随，防循环）；每轮检查取消标志（大目录枚举可中断）
     fn collect_local_entries(
         &self,
         dir: &std::path::Path,
@@ -972,6 +1014,9 @@ impl Worker {
         let entries = std::fs::read_dir(dir)
             .map_err(|e| CoreError::Internal(format!("read local dir failed: {e}")))?;
         for entry in entries {
+            if self.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return Err(CoreError::Internal("transfer cancelled".into()));
+            }
             let entry = entry
                 .map_err(|e| CoreError::Internal(format!("read local entry failed: {e}")))?;
             let name = entry.file_name().to_string_lossy().to_string();
@@ -983,6 +1028,9 @@ impl Worker {
             let ft = entry
                 .file_type()
                 .map_err(|e| CoreError::Internal(format!("local file type failed: {e}")))?;
+            if ft.is_symlink() {
+                continue;
+            }
             if ft.is_dir() {
                 out.push((entry.path().to_string_lossy().to_string(), rel_path.clone(), 0, true));
                 self.collect_local_entries(&entry.path(), &rel_path, out)?;

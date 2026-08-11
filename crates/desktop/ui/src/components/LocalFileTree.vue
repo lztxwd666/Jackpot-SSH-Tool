@@ -59,8 +59,8 @@ const blankMenuStyle = computed(() => {
   return { left: p.x + 'px', top: p.y + 'px' }
 })
 function onBlankContextMenu(e: MouseEvent) {
-  // 仅空白区域（未命中文件节点）显示新建菜单
-  if ((e.target as HTMLElement).closest('.tree-node')) return
+  // 空白区域与".."父目录节点显示新建菜单（up-node 非可操作文件项）
+  if ((e.target as HTMLElement).closest('.tree-node:not(.up-node)')) return
   e.preventDefault()
   blankMenu.value = { x: e.clientX, y: e.clientY }
 }
@@ -69,16 +69,17 @@ function closeBlankMenu() { blankMenu.value = null }
 // 菜单打开时注册全局点击关闭（点击菜单外任意处消除菜单，标准交互）
 useClickOutsideClose(showMenu, closeMenu)
 useClickOutsideClose(blankMenu, closeBlankMenu)
-// 失焦清除选区：点击文件树外部（终端/主机栏等）取消选中（VSCode 行为）
+// 失焦清除选区：点击本地树外部（含另一棵树）取消选中（VSCode 行为）
 useClearSelectionOnOutside(() => {
   selected.clear()
   anchor = null
-}, '.file-tree')
+}, '.file-tree--local')
 
-// 点击文件树内部：空白区域（未命中节点）同样清除选区
+// 点击文件树内部：空白区域（未命中节点与标题栏）同样清除选区；
+// 标题栏按钮点击不清除（新建操作不应丢失原选区）
 function onTreeClick(e: MouseEvent) {
   closeMenu()
-  if (!(e.target as HTMLElement).closest('.tree-node')) {
+  if (!(e.target as HTMLElement).closest('.tree-node, .tree-header')) {
     selected.clear()
     anchor = null
   }
@@ -335,9 +336,9 @@ async function doRename() {
   if (!newName || newName === target.name) return
   // 校验名称：拒绝路径分隔符与 ..（防移动到目录外）
   if (!isValidNewName(newName)) { showToast(t('toast.invalidName'), 'error', 4000); return }
-  // 重名冲突（排除自身）：与新建一致的处理
+  // 重名冲突（排除自身）：重命名不给"覆盖"选项（Windows rename 目标存在即失败）
   const others = new Set(files.value.filter(f => f.name !== target.name).map(f => f.name))
-  const final = await resolveNameConflict(newName, others)
+  const final = await resolveNameConflict(newName, others, { allowOverwrite: false })
   if (!final) return
   const parent = currentPath.value.replace(/\\$/, '')
   try {
@@ -380,7 +381,7 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
 </script>
 
 <template>
-  <div class="file-tree" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragenter="onDragenter"
+  <div class="file-tree file-tree--local" :class="{ 'drag-over': dragOver }" @drop.prevent="onDrop" @dragenter="onDragenter"
     @dragover="onDragover" @dragleave="onDragLeave" @click="onTreeClick">
     <!-- VSCode EXPLORER 样式标题栏：标题居左，悬停显示新建文件/文件夹/刷新 -->
     <FileTreeHeader :title="t('tree.localTitle')" @new-file="doNewFile" @new-folder="doNewFolder" @refresh="refresh" />

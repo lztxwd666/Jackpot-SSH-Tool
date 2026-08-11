@@ -594,14 +594,17 @@ const cancelledTransfers = new Set<string>()
 // 校验完成（成功/失败/取消）时移除，随后"已下载到"等结果 toast 同位置衔接
 const verifyingToasts: Record<string, number> = {}
 // 批量传输（多选）：逐项串行执行（worker 单线程 transferring 互斥，
-// 并发发起会报 transfer already in progress）；单文件失败不影响后续
+// 并发发起会报 transfer already in progress）；单文件失败不影响后续；
+// 批量中途会话被关闭（标签关闭）时中止剩余项，避免对已关会话报错刷 toast
 async function downloadMany(sessionId: string, items: DragItem[], localDir?: string) {
   for (const item of items) {
+    if (!tabs.value.some(t => t.sessionId === sessionId)) return
     await downloadFile(sessionId, item.path, localDir, item.isDir)
   }
 }
 async function uploadMany(sessionId: string, remoteDir: string, items: DragItem[], expectedDir?: string) {
   for (const item of items) {
+    if (!tabs.value.some(t => t.sessionId === sessionId)) return
     await uploadFile(sessionId, remoteDir, item.path, expectedDir, item.isDir)
   }
 }

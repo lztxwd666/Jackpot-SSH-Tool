@@ -6,17 +6,21 @@ import { t } from './i18n'
 /**
  * 名称冲突处理（系统文件管理器惯例）：目标名已存在时弹窗询问 自动改名/覆盖，
  * 取消返回 null；自动改名为默认主操作（首个按钮）。两棵文件树共用
+ * 冲突判定大小写不敏感（Windows NTFS）；allowOverwrite 为 false 时不提供
+ * "覆盖"选项（重命名场景：Windows rename/SFTP rename 目标存在即失败，覆盖不可兑现）
  */
-export async function resolveNameConflict(name: string, existing: Set<string>): Promise<string | null> {
-  if (!existing.has(name)) return name
-  const choice = await choiceDialog(
-    t('prompt.overwriteMsg', { name }),
-    t('prompt.overwriteTitle'),
-    [
-      { label: t('common.autoRename'), value: 'rename' },
-      { label: t('common.overwrite'), value: 'overwrite' },
-    ],
-  )
+export async function resolveNameConflict(
+  name: string,
+  existing: Set<string>,
+  options?: { allowOverwrite?: boolean },
+): Promise<string | null> {
+  const lower = new Set([...existing].map(s => s.toLowerCase()))
+  if (!lower.has(name.toLowerCase())) return name
+  const choices = [{ label: t('common.autoRename'), value: 'rename' }]
+  if (options?.allowOverwrite !== false) {
+    choices.push({ label: t('common.overwrite'), value: 'overwrite' })
+  }
+  const choice = await choiceDialog(t('prompt.overwriteMsg', { name }), t('prompt.overwriteTitle'), choices)
   if (!choice) return null
   return choice === 'rename' ? uniqueFileName(name, existing) : name
 }
@@ -43,14 +47,17 @@ export function isValidNewName(name: string): boolean {
  * 重名冲突时生成唯一名（系统文件管理器惯例）：preferred 被占用时追加 " (n)"
  * 于主名之后、扩展名之前，如 a.txt → a (1).txt → a (2).txt（检测已存在性递增）。
  * 点开头文件（.env）无扩展名，直接追加后缀
+ * 已存在性按大小写不敏感比较（Windows NTFS 大小写不敏感：a.txt 与 A.txt 冲突，
+ * 否则新建会静默截断原文件）
  */
 export function uniqueFileName(preferred: string, existing: Set<string>): string {
-  if (!existing.has(preferred)) return preferred
+  const lower = new Set([...existing].map(s => s.toLowerCase()))
+  if (!lower.has(preferred.toLowerCase())) return preferred
   const dot = preferred.lastIndexOf('.')
   const base = dot > 0 ? preferred.slice(0, dot) : preferred
   const ext = dot > 0 ? preferred.slice(dot) : ''
   let i = 1
-  while (existing.has(`${base} (${i})${ext}`)) i++
+  while (lower.has(`${base} (${i})${ext}`.toLowerCase())) i++
   return `${base} (${i})${ext}`
 }
 
