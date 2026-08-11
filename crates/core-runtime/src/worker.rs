@@ -233,7 +233,12 @@ pub(crate) fn run_loop(
 /// 内部通道类型（worker 通道注册表条目；归属 worker 而非 channel 模块，
 /// 保持 channel → worker 单向依赖，避免模块级循环依赖）
 enum ChannelInner {
-    Session(ssh2::Channel),
+    // stderr_eof：通道 stderr 流已结束（motd 等 PAM 横幅经 sshd 发到 stderr；
+    // stderr 的 EOF 不代表通道关闭，仅停止该流读取）
+    Session {
+        ch: ssh2::Channel,
+        stderr_eof: bool,
+    },
     Sftp(ssh2::Sftp),
 }
 
@@ -469,7 +474,7 @@ impl Worker {
         let inner = match ctype {
             ChannelType::Shell => {
                 let ch = open_shell_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
-                ChannelInner::Session(ch)
+                ChannelInner::Session { ch, stderr_eof: false }
             }
             ChannelType::Sftp => {
                 let sftp = open_sftp_raw(ssh_session, sid, channel_id, dispatcher.clone())?;
@@ -492,7 +497,7 @@ impl Worker {
             .get_mut(&channel)
             .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
         match inner {
-            ChannelInner::Session(ch) => {
+            ChannelInner::Session { ch, .. } => {
                 if let Err(e) = write_full(&self.cancel, |buf| ch.write(buf), data) {
                     // 写失败（连接已死或已断开）：主动断开并广播（原因供 UI 展示）
                     let msg = format!("channel write failed: {e}");
@@ -514,7 +519,7 @@ impl Worker {
             .get_mut(&channel)
             .ok_or_else(|| CoreError::Internal("channel not found".into()))?;
         match inner {
-            ChannelInner::Session(ch) => {
+            ChannelInner::Session { ch, .. } => {
                 io_retry(
                     || ch.request_pty_size(cols, rows, Some(cols * 8), Some(rows * 16)),
                     &self.cancel,
@@ -533,7 +538,7 @@ impl Worker {
     fn channel_close_inner(&mut self, channel: ChannelId) -> CoreResult<()> {
         if let Some(inner) = self.raw_channels.remove(&channel) {
             match inner {
-                ChannelInner::Session(mut ch) => {
+                ChannelInner::Session { mut ch, .. } => {
                     let _ = ch.close();
                     let _ = ch.wait_close();
                 }
@@ -1244,42 +1249,78 @@ impl Worker {
         }
     }
 
-    /// 非阻塞读一次 shell 通道；有数据则 dispatch DataReceived
+    /// 非阻塞读一次 shell 通道（stdout + stderr）；有数据则 dispatch DataReceived
     fn poll_shell_read(&mut self, channel: ChannelId) -> CoreResult<()> {
-        let inner = match self.raw_channels.get_mut(&channel) {
-            Some(i) => i,
-            None => return Ok(()), // 已关闭
-        };
-        let ChannelInner::Session(ch) = inner else {
-            return Ok(());
-        };
-        let mut buf = [0u8; 4096];
-        match ch.read(&mut buf) {
-            Ok(0) => {
-                // EOF：通道已由远端关闭，清理本地通道资源并广播 Closed（停止无谓轮询）
-                self.channel_close_inner(channel)?;
-                Ok(())
-            }
-            Ok(n) => {
-                let data = Vec::from(&buf[..n]);
-                self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
-                    session_id: self.session_id(),
-                    channel_id: channel,
-                    data,
-                }));
-                Ok(())
-            }
-            Err(e) => {
-                if crate::ssh::is_would_block(&e) {
-                    return Ok(()); // EAGAIN：无事
+        // stdout 读取（块作用域收束通道借用：EOF 关通道/读错误断开后不再继续）
+        {
+            let inner = match self.raw_channels.get_mut(&channel) {
+                Some(i) => i,
+                None => return Ok(()), // 已关闭
+            };
+            let ChannelInner::Session { ch, .. } = inner else {
+                return Ok(());
+            };
+            let mut buf = [0u8; 4096];
+            match ch.read(&mut buf) {
+                Ok(0) => {
+                    // EOF：通道已由远端关闭，清理本地通道资源并广播 Closed（停止无谓轮询）
+                    return self.channel_close_inner(channel);
                 }
-                // 真实读错误：连接已死，主动断开并广播（原因供 UI 展示）
-                let msg = format!("channel read failed: {e}");
-                tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell read failed, disconnecting");
-                self.disconnect_inner(&msg);
-                Err(CoreError::Internal(msg))
+                Ok(n) => {
+                    let data = Vec::from(&buf[..n]);
+                    self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
+                        session_id: self.session_id(),
+                        channel_id: channel,
+                        data,
+                    }));
+                }
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        return Ok(()); // EAGAIN：无事
+                    }
+                    // 真实读错误：连接已死，主动断开并广播（原因供 UI 展示）
+                    let msg = format!("channel read failed: {e}");
+                    tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell read failed, disconnecting");
+                    self.disconnect_inner(&msg);
+                    return Err(CoreError::Internal(msg));
+                }
             }
         }
+        // stderr 流读取：motd/Last login 等 PAM 会话横幅经 sshd 发送到通道 stderr，
+        // 真实终端将 stderr 与 stdout 同屏显示；此前只读 stdout 导致登录横幅缺失。
+        // stderr 的 EOF 不代表通道关闭（stdout 可能仍活跃），仅置标志停止本流读取。
+        // 重新取通道（与 stdout 分开作用域，避免 dispatch 与通道可变借用互斥）
+        let inner = match self.raw_channels.get_mut(&channel) {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        let ChannelInner::Session { ch, stderr_eof } = inner else {
+            return Ok(());
+        };
+        if !*stderr_eof {
+            let mut ebuf = [0u8; 4096];
+            match ch.stderr().read(&mut ebuf) {
+                Ok(0) => *stderr_eof = true,
+                Ok(n) => {
+                    let data = Vec::from(&ebuf[..n]);
+                    self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
+                        session_id: self.session_id(),
+                        channel_id: channel,
+                        data,
+                    }));
+                }
+                Err(e) => {
+                    if crate::ssh::is_would_block(&e) {
+                        return Ok(()); // EAGAIN：无事
+                    }
+                    let msg = format!("channel stderr read failed: {e}");
+                    tracing::warn!(session_id = ?self.session_id(), channel_id = ?channel, error = %e, "shell stderr read failed, disconnecting");
+                    self.disconnect_inner(&msg);
+                    return Err(CoreError::Internal(msg));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
