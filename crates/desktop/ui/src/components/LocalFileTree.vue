@@ -187,12 +187,19 @@ function onClickItem(e: MouseEvent, file: FileNode) {
 }
 
 // Shift 范围选：从锚点到当前项之间的全部项（列表顺序）
-// anchor 在首次 Shift 点击（无锚点）时同样更新，否则后续 Shift 点击退化为单选
+// 首次 Shift 点击（anchor 为空）把当前项设为锚点（VSCode 行为：先按 Shift 再
+// 接连点击同样生效）；锚点在后续 Shift 点击中保持（范围以最初锚点扩展/收缩）
 function rangeSelect(path: string) {
   const paths = files.value.map(f => f.path)
   const cur = paths.indexOf(path)
-  const anc = anchor ? paths.indexOf(anchor) : cur
-  if (cur < 0 || anc < 0) {
+  if (cur < 0) {
+    selected.clear()
+    anchor = null
+    return
+  }
+  if (!anchor) anchor = path
+  const anc = paths.indexOf(anchor)
+  if (anc < 0) {
     selected.clear()
     selected.add(path)
     anchor = path
