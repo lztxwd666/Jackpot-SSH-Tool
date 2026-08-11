@@ -16,9 +16,6 @@ let term: Terminal
 let fitAddon: FitAddon
 let observer: ResizeObserver
 let resizeTimer: number | undefined
-// 卸载标记：await listen 期间组件可能被卸载（重连 :key 重建），
-// 返回后检查标记解绑监听器并中止初始化，防监听器泄漏与对已 dispose 终端的写入
-let disposed = false
 // 会话结束标记：shell EOF 远端关闭通道（Closed 事件）后停止发送输入并显示提示
 // （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
 let ended = false
@@ -182,7 +179,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  disposed = true
   unregisterChannelSink(props.channelId)
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
   observer?.disconnect()

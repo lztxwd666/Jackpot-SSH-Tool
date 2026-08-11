@@ -268,6 +268,9 @@ struct Worker {
     // 传输栈弹出（其局部 ssh2::File drop 会解引用 session，提前释放即 use-after-free）
     pending_disconnect: Option<String>,
     pending_close: bool,
+    // USERAUTH_BANNER 已注入标志：横幅在认证期间到达（RFC 4252 §5.4），终端此时
+    // 尚未创建，于首个 shell 通道打开时注入为该通道首批数据；多次 open_shell 不得重复注入
+    banner_injected: bool,
 }
 
 impl Worker {
@@ -292,6 +295,7 @@ impl Worker {
             hash_cmd: None,
             pending_disconnect: None,
             pending_close: false,
+            banner_injected: false,
         }
     }
 
@@ -483,6 +487,31 @@ impl Worker {
         };
         self.raw_channels.insert(channel_id, inner);
         self.channels.push(channel_id);
+
+        // USERAUTH_BANNER（RFC 4252 §5.4）：服务器认证期间发送的横幅（欢迎/法律声明），
+        // 客户端应显示；终端在连接后才创建，认证时无显示载体，故于首个 shell 通道打开时
+        // 注入为该通道首批数据（显示于终端顶部、motd 之前，与真实 SSH 客户端观感一致）
+        if ctype == ChannelType::Shell && !self.banner_injected {
+            let banner = self
+                .connection
+                .as_ref()
+                .and_then(|c| c.session())
+                .and_then(|s| s.banner())
+                .filter(|b| !b.is_empty());
+            if let Some(banner) = banner {
+                self.banner_injected = true;
+                let mut data = banner.as_bytes().to_vec();
+                if !data.ends_with(b"\n") {
+                    data.push(b'\n'); // 横幅文本可能不带尾换行，补一行保证显示完整
+                }
+                self.dispatch(CoreEvent::Channel(ChannelEvent::DataReceived {
+                    session_id: sid,
+                    channel_id,
+                    data,
+                }));
+            }
+        }
+
         self.dispatch(CoreEvent::Channel(ChannelEvent::Opened {
             session_id: sid,
             channel_id,
