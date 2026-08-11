@@ -74,12 +74,13 @@ onMounted(async () => {
     cursorBlink: true,
     fontSize: 14,
     // 终端配色独立于界面主题（OneDark ANSI 色板，实测自 Binaryify/OneDark-Pro，MIT）
-    // 背景固定经典黑底 #1e1e1e，不随界面主题切换；其余色值为仓库实测值
+    // 背景固定深色（OneDark-Pro 实测中间档 #23272e，比经典黑略淡但保持深色观感，
+    // 用户反馈纯黑过于沉重），不随界面主题切换；其余色值为仓库实测值
     theme: {
-      background: '#1e1e1e', // 经典黑底固定，不随主题切换
+      background: '#23272e', // 固定深色，不随主题切换
       foreground: '#abb2bf',
       cursor: '#61afef', // 仓库未定义 terminalCursor 键，采用设计值（OneDark 蓝）
-      cursorAccent: '#1e1e1e',
+      cursorAccent: '#23272e',
       selectionBackground: '#3e4451',
       black: '#3f4451',
       red: '#e05561',
@@ -203,6 +204,8 @@ onBeforeUnmount(() => {
 .terminal-container {
   width: 100%;
   height: 100%;
+  /* 内容与左右分隔线留白（字符不再贴文件树边框）；xterm fit 会自动扣除容器 padding 计算行列 */
+  padding: 0 10px;
 }
 
 .terminal-container :deep(.xterm) {
