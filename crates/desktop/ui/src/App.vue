@@ -1010,7 +1010,7 @@ onBeforeUnmount(() => {
 
 /* 标签页工作区布局：左侧区域三行（标签栏/工作区/状态栏），右侧主机栏独立 */
 .left-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 4px 4px 0; gap: 0.2rem; }
+.tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 3px 4px 0; gap: 0.2rem; }
 .tab { display: inline-flex; align-items: center; gap: 0.4rem; height: 28px; padding: 0 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
 .tab.active { border-bottom-color: var(--color-background); background: var(--color-background-mute); }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; }
