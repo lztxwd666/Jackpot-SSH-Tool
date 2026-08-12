@@ -446,7 +446,7 @@ watch(() => props.locked, (locked) => {
 <style scoped>
 .file-tree {
   display: flex; flex-direction: column; height: 100%;
-  background: var(--color-panel); border-left: 1px solid var(--color-border);
+  background: var(--color-panel);
   user-select: none; font-size: 0.8rem; position: relative;
 }
 .tree-body { flex: 1; overflow-y: auto; }
