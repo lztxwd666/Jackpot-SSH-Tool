@@ -145,11 +145,6 @@ impl Session {
             reply_rx,
         )
     }
-
-    /// 关闭所有通道（投递 CloseAllChannels 到 worker）
-    pub fn close_all_channels(&self) -> CoreResult<()> {
-        self.worker.send(WorkerCommand::CloseAllChannels)
-    }
 }
 
 impl Drop for Session {

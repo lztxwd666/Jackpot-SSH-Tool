@@ -7,7 +7,7 @@ use core_event::EventDispatcher;
 use core_event::event::{ConnectionEvent, CoreEvent, HostKeyEvent};
 use ssh2::Session;
 use std::io::Read;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,24 +52,52 @@ impl SshConnection {
     }
 
     fn connect_inner(&mut self) -> CoreResult<()> {
-        let addr = format!("{}:{}", self.config.host, self.config.port);
-
         self.dispatcher
             .dispatch(CoreEvent::Connection(ConnectionEvent::Connecting {
                 host: self.config.host.clone(),
                 port: self.config.port,
             }));
 
-        // TCP 连接
+        // TCP 连接：主机名经系统 DNS 解析（(&str, u16) 的 ToSocketAddrs 实现把 IP 字面量
+        // 直接解析、其余走 getaddrinfo，IPv6 字面量同样正确处理）。解析出的地址逐个
+        // 尝试连接、首个成功即用（OpenSSH 同款行为：多地址按序尝试，前一个不可达回退
+        // 下一个）。DNS 解析在 worker 线程内阻塞执行（Active Object 语义：连接管线
+        // 全部在 worker，不卡 UI）
         let timeout = Duration::from_secs(self.config.timeout_secs);
-        let tcp = TcpStream::connect_timeout(
-            &addr.parse().map_err(|e| {
-                core_common::CoreError::Internal(format!("invalid address {addr}: {e}"))
-            })?,
-            timeout,
-        )
-        .map_err(|e| {
-            core_common::CoreError::Internal(format!("TCP connect to {addr} failed: {e}"))
+        let addrs = (self.config.host.as_str(), self.config.port)
+            .to_socket_addrs()
+            .map_err(|e| {
+                core_common::CoreError::Internal(format!(
+                    "cannot resolve host {}: {e}",
+                    self.config.host
+                ))
+            })?;
+        let mut tcp = None;
+        let mut last_err: Option<std::io::Error> = None;
+        for addr in addrs {
+            match TcpStream::connect_timeout(&addr, timeout) {
+                Ok(s) => {
+                    tcp = Some(s);
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let tcp = tcp.ok_or_else(|| {
+            last_err.map_or_else(
+                || {
+                    core_common::CoreError::Internal(format!(
+                        "no usable address for {}",
+                        self.config.host
+                    ))
+                },
+                |e| {
+                    core_common::CoreError::Internal(format!(
+                        "TCP connect to {}:{} failed: {e}",
+                        self.config.host, self.config.port
+                    ))
+                },
+            )
         })?;
         tcp.set_read_timeout(Some(timeout)).map_err(|e| {
             core_common::CoreError::Internal(format!("set read timeout failed: {e}"))

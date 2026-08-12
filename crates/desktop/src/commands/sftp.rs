@@ -314,7 +314,11 @@ pub async fn sftp_upload_file(
             let local_hash = local_hash.map_err(|e| e.to_string())?;
             if !rh.eq_ignore_ascii_case(&local_hash) {
                 // 校验失败：删除损坏的远端文件并报错（不回传哈希值，见下载侧注释）
-                let _ = ch_verify.sftp_remove_file(&rp);
+                // 删除为阻塞 IPC 调用：async 命令内不得直接阻塞 tokio 线程，包 spawn_blocking
+                // （与文件内其他阻塞操作的处理一致；删除失败不阻断主错误回报）
+                let ch_rm = ch_verify.clone();
+                let rp_rm = rp.clone();
+                let _ = tokio::task::spawn_blocking(move || ch_rm.sftp_remove_file(&rp_rm)).await;
                 return Err("checksum mismatch, uploaded file removed".into());
             }
         }
