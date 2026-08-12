@@ -69,7 +69,7 @@ function uploadFromLocal(localPath: string, isDir = false) {
 // 树宽度拖拽（增量式：左侧树向右拖增宽，右侧树向左拖增宽即 dx 取反）
 // onMove 的 dx 是每帧增量，须累加到 props 活值（emit 后父级 onResizeLocal/onResizeRemote
 // 立即回写 props，下一帧读到的即累积值）；冻结 start 会每帧从起点重算，宽度不跟随鼠标。
-// clamp 与持久化在 App.vue 统一处理（与主机栏 sidebarWidth.value + dx 同模式）
+// clamp 与持久化在 App.vue 统一处理（与主机栏 sidebarWidth 同模式，其方向为 -dx：面板在分隔线右侧）
 function onLocalSplitter(e: MouseEvent) {
   startPanelDrag(e.clientX, (dx) => emit('resize-local', props.localWidth + dx), () => {})
 }
