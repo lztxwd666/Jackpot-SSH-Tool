@@ -46,8 +46,8 @@ const menu = ref<{ x: number; y: number; host: Host } | null>(null)
 // 位置在悬停起始处固定（不随鼠标移动，避免抖动）；clamp 防溢出窗口边缘（主机栏在右，卡默认偏右下）
 const TIP_WIDTH = 200
 const TIP_HEIGHT = 150
-// 悬停延迟：光标停留 300ms 才显示信息卡（快速扫过主机列表不触发，成熟 UI 惯例）
-const TIP_DELAY = 300
+// 悬停延迟：光标停留 500ms 才显示信息卡（快速扫过主机列表不触发）
+const TIP_DELAY = 500
 const tip = ref<{ x: number; y: number; host: Host } | null>(null)
 let tipTimer: number | undefined
 function showTip(e: MouseEvent, host: Host) {
@@ -151,24 +151,20 @@ useClearSelectionOnOutside(() => { selectedId.value = null }, '.host-panel')
       <input :value="searchQuery" type="text" :placeholder="t('hosts.searchPlaceholder')" @input="onSearchInput" />
     </div>
     <div class="host-list">
-      <template v-for="([groupName, groupHosts], groupIdx) in groupedHosts" :key="(groupName || '__unassigned__') + ':' + groupIdx">
+      <template v-for="([groupName, groupHosts], groupIdx) in groupedHosts"
+        :key="(groupName || '__unassigned__') + ':' + groupIdx">
         <div class="group-header">{{ groupName || t('hosts.groupUnassigned') }}</div>
         <ul>
-          <li v-for="host in groupHosts" :key="host.id"
-            :class="{ active: selectedId === host.id }"
-            @click="selectedId = host.id"
-            @dblclick="onHostDblClick(host)"
-            @mouseenter="showTip($event, host)"
-            @mouseleave="hideTip"
-            @contextmenu="onContextMenu($event, host)">
+          <li v-for="host in groupHosts" :key="host.id" :class="{ active: selectedId === host.id }"
+            @click="selectedId = host.id" @dblclick="onHostDblClick(host)" @mouseenter="showTip($event, host)"
+            @mouseleave="hideTip" @contextmenu="onContextMenu($event, host)">
             <span class="host-main">
               <span class="host-name">{{ host.name }}</span>
               <!-- 收藏星标（SVG 无 emoji）：点击切换收藏，不触发行其他操作；
                    收藏金色高亮，未收藏弱显示（成熟客户端惯例） -->
               <svg class="star" :class="{ active: host.favorite }"
-                :title="host.favorite ? t('hosts.unfavorite') : t('form.favorite')"
-                viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                stroke-linecap="round" stroke-linejoin="round"
+                :title="host.favorite ? t('hosts.unfavorite') : t('form.favorite')" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
                 @click.stop="emit('toggle-favorite', host)">
                 <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" />
               </svg>
@@ -191,7 +187,8 @@ useClearSelectionOnOutside(() => { selectedId.value = null }, '.host-panel')
       <div class="tip-grid">
         <span class="tip-label">{{ t('detail.username') }}</span><span>{{ tip.host.username }}</span>
         <span class="tip-label">{{ t('detail.auth') }}</span><span>{{ authLabel(tip.host.auth_type) }}</span>
-        <span class="tip-label">{{ t('detail.group') }}</span><span>{{ tip.host.group_name || t('hosts.groupUnassigned') }}</span>
+        <span class="tip-label">{{ t('detail.group') }}</span><span>{{ tip.host.group_name || t('hosts.groupUnassigned')
+        }}</span>
         <template v-if="tip.host.notes">
           <span class="tip-label">{{ t('detail.notes') }}</span><span class="tip-notes">{{ tip.host.notes }}</span>
         </template>
@@ -202,54 +199,234 @@ useClearSelectionOnOutside(() => { selectedId.value = null }, '.host-panel')
 
 <style scoped>
 /* 主机栏整体：右侧区域内的上半部分（flex:1 上下贯通）；宽度跟随 --sidebar-width CSS 变量（splitter 拖拽联动），未设置时回退默认 220px */
-.host-panel { width: var(--sidebar-width, 220px); min-width: var(--sidebar-width, 220px); background: var(--color-sidebar); display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.sidebar-header { display: flex; justify-content: space-between; align-items: center; height: var(--bar-height); padding: 0 0.8rem; border-bottom: 1px solid var(--color-border); }
-.sidebar-header h2 { font-size: 0.95rem; color: var(--color-heading); }
-.search-bar { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--color-border); }
-.search-bar input { width: 100%; padding: 0.3rem 0.4rem; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-background); color: var(--color-text); font-size: 0.8rem; box-sizing: border-box; }
-.host-list { flex: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+.host-panel {
+  width: var(--sidebar-width, 220px);
+  min-width: var(--sidebar-width, 220px);
+  background: var(--color-sidebar);
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: var(--bar-height);
+  padding: 0 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sidebar-header h2 {
+  font-size: 0.95rem;
+  color: var(--color-heading);
+}
+
+.search-bar {
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.search-bar input {
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  box-sizing: border-box;
+}
+
+.host-list {
+  flex: 1;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
 /* 分组标题：小号灰色，与主机项区分 */
-.group-header { padding: 0.35rem 0.8rem 0.15rem; font-size: 0.7rem; font-weight: 600; color: var(--color-text); opacity: 0.55; text-transform: uppercase; }
-.host-list ul { list-style: none; padding: 0; margin: 0; }
-.host-list ul li { padding: 0.5rem 0.8rem; cursor: pointer; border-bottom: 1px solid var(--color-border); }
-.host-list ul li:hover { background: var(--color-background-mute); }
-.host-list ul li.active { background: var(--color-border-hover); }
-.host-main { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; min-width: 0; }
-.host-name { font-weight: 600; color: var(--color-heading); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.host-addr { font-size: 0.7rem; color: var(--color-text); opacity: 0.7; }
+.group-header {
+  padding: 0.35rem 0.8rem 0.15rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text);
+  opacity: 0.55;
+  text-transform: uppercase;
+}
+
+.host-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.host-list ul li {
+  padding: 0.5rem 0.8rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.host-list ul li:hover {
+  background: var(--color-background-mute);
+}
+
+.host-list ul li.active {
+  background: var(--color-border-hover);
+}
+
+.host-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.host-name {
+  font-weight: 600;
+  color: var(--color-heading);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-addr {
+  font-size: 0.7rem;
+  color: var(--color-text);
+  opacity: 0.7;
+}
+
 /* 收藏星标：未收藏弱显示（悬停变亮），收藏金色高亮 */
-.star { width: 13px; height: 13px; flex-shrink: 0; color: var(--color-text); opacity: 0.25; cursor: pointer; transition: opacity 0.15s; }
-.star:hover { opacity: 0.9; }
-.star.active { opacity: 1; color: var(--color-warning); fill: var(--color-warning); }
+.star {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--color-text);
+  opacity: 0.25;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.star:hover {
+  opacity: 0.9;
+}
+
+.star.active {
+  opacity: 1;
+  color: var(--color-warning);
+  fill: var(--color-warning);
+}
 
 /* context-menu 沿用 RemoteFileTree 样式；删除项红色警示 */
 .context-menu {
-  position: fixed; background: var(--color-background); border: 1px solid var(--color-border);
-  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000; min-width: 120px;
+  position: fixed;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  min-width: 120px;
 }
-.menu-item { padding: 0.3rem 0.8rem; cursor: pointer; font-size: 0.8rem; }
-.menu-item:hover { background: var(--color-background-mute); }
-.menu-item.danger { color: var(--color-danger); }
+
+.menu-item {
+  padding: 0.3rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.menu-item:hover {
+  background: var(--color-background-mute);
+}
+
+.menu-item.danger {
+  color: var(--color-danger);
+}
 
 /* 悬停信息卡：与 context-menu 同风格浮层；pointer-events none 保证不干扰鼠标悬停切换 */
 .host-tip {
-  position: fixed; width: 200px; padding: 0.6rem 0.7rem;
-  background: var(--color-background); border: 1px solid var(--color-border);
-  border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); z-index: 1000;
-  pointer-events: none; animation: tip-in 0.12s ease-out;
+  position: fixed;
+  width: 200px;
+  padding: 0.6rem 0.7rem;
+  background: var(--color-background);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  pointer-events: none;
+  animation: tip-in 0.12s ease-out;
 }
-.tip-title { font-size: 0.85rem; font-weight: 600; color: var(--color-heading); margin-bottom: 0.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tip-addr { font-size: 0.72rem; color: var(--color-text); opacity: 0.7; font-family: Consolas, monospace; margin-bottom: 0.5rem; }
-.tip-grid { display: grid; grid-template-columns: auto 1fr; gap: 0.25rem 0.8rem; font-size: 0.75rem; }
-.tip-label { color: var(--color-text); opacity: 0.55; white-space: nowrap; }
-.tip-notes { white-space: pre-wrap; word-break: break-all; }
-@keyframes tip-in { from { opacity: 0; } to { opacity: 1; } }
+
+.tip-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-heading);
+  margin-bottom: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tip-addr {
+  font-size: 0.72rem;
+  color: var(--color-text);
+  opacity: 0.7;
+  font-family: Consolas, monospace;
+  margin-bottom: 0.5rem;
+}
+
+.tip-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.25rem 0.8rem;
+  font-size: 0.75rem;
+}
+
+.tip-label {
+  color: var(--color-text);
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+.tip-notes {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
 
 .btn {
-  padding: 0.3rem 0.7rem; border: 1px solid var(--color-border); border-radius: 4px;
-  background: var(--color-background); color: var(--color-text); cursor: pointer; font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-background);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 0.8rem;
 }
-.btn:hover { background: var(--color-background-mute); }
-.btn-primary { background: var(--color-accent); color: #fff; border-color: var(--color-accent); }
-.btn-primary:hover { background: color-mix(in srgb, var(--color-accent), black 12%); }
+
+.btn:hover {
+  background: var(--color-background-mute);
+}
+
+.btn-primary {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+}
+
+.btn-primary:hover {
+  background: color-mix(in srgb, var(--color-accent), black 12%);
+}
 </style>
