@@ -40,7 +40,7 @@ const emit = defineEmits<{
 /* 标题居左；右侧动作区默认隐藏，悬停标题栏时淡入（VSCode EXPLORER 惯例） */
 .tree-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0.35rem 0.5rem; font-weight: 600; color: var(--color-heading);
+  height: var(--bar-height); padding: 0 0.5rem; font-weight: 600; color: var(--color-heading);
   border-bottom: 1px solid var(--color-border); flex-shrink: 0;
 }
 .header-title { font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

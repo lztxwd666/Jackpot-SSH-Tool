@@ -1010,8 +1010,8 @@ onBeforeUnmount(() => {
 
 /* 标签页工作区布局：左侧区域三行（标签栏/工作区/状态栏），右侧主机栏独立 */
 .left-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-.tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 0.2rem 0.2rem 0; gap: 0.2rem; }
-.tab { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
+.tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 4px 4px 0; gap: 0.2rem; }
+.tab { display: inline-flex; align-items: center; gap: 0.4rem; height: 28px; padding: 0 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
 .tab.active { border-bottom-color: var(--color-background); background: var(--color-background-mute); }
 .tab-dot { width: 8px; height: 8px; border-radius: 50%; }
 .tab-dot.connected { background: var(--color-success); }
@@ -1020,12 +1020,12 @@ onBeforeUnmount(() => {
 .tab-close { color: var(--color-text); opacity: 0.6; cursor: pointer; }
 .tab-close:hover { opacity: 1; }
 .tab-content { flex: 1; display: flex; overflow: hidden; }
-.status-bar { padding: 0.3rem 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; }
+.status-bar { height: var(--bar-height); padding: 0 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; }
 .status-badge { font-size: 0.7rem; color: var(--color-success); }
 /* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；border-left 分隔左右区域 */
 .right-area { display: flex; flex-direction: column; border-left: 1px solid var(--color-border); }
 /* 底部栏固定高度：滑出面板以其为 bottom 边界（不遮挡底部栏，用户反馈） */
-.right-footer { height: 32px; box-sizing: border-box; padding: 0 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
+.right-footer { height: var(--bar-height); box-sizing: border-box; padding: 0 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
 .locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }
 
 .placeholder { flex: 1; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--color-text); opacity: 0.5; }

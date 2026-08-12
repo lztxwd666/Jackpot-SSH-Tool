@@ -47,6 +47,12 @@
   background: transparent;
 }
 
+/* 横向栏统一高度（布局度量规范）：固定 bar 一律此高度 + border-box + flex 居中，
+   水平分隔线位置由高度唯一决定，跨区域天然对齐；内容驱动区域（多行 tab 等）为例外 */
+:root {
+  --bar-height: 32px;
+}
+
 *,
 *::before,
 *::after {

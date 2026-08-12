@@ -120,7 +120,7 @@ function uploadFromLocal(localPath: string, isDir = false) {
 .session-tab { display: flex; flex: 1; min-width: 0; }
 /* 终端与远程文件树之间的分隔线（线条对齐：各区域分隔统一 1px var(--color-border)） */
 .terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
-.terminal-header { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.terminal-header { display: flex; justify-content: space-between; align-items: center; height: var(--bar-height); padding: 0 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
 .connection-host { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; white-space: nowrap; }
 /* IP 地址：次显（灰色小字），与主机名区分层级 */
