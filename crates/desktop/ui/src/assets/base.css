@@ -58,7 +58,7 @@
   transition: background 0.15s;
 }
 .splitter:hover {
-  background: rgba(97, 175, 239, 0.2);
+  background: color-mix(in srgb, var(--color-accent), transparent 80%);
 }
 
 /* 横向栏统一高度（布局度量规范）：固定 bar 一律此高度 + border-box + flex 居中，

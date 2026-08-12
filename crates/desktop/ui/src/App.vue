@@ -53,7 +53,7 @@ function applySidebarWidth() {
 }
 function onSidebarDrag(e: MouseEvent) {
   startPanelDrag(e.clientX, (dx) => {
-    sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth.value + dx))
+    sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth.value - dx))
     applySidebarWidth()
   }, () => {
     localStorage.setItem('layout.sidebarWidth', String(sidebarWidth.value))
