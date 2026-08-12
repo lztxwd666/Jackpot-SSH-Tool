@@ -52,6 +52,8 @@ function applySidebarWidth() {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`)
 }
 function onSidebarDrag(e: MouseEvent) {
+  // preventDefault：阻止浏览器把按下后的移动解释为原生拖放/文本选择（splitter 与 draggable 元素相邻）
+  e.preventDefault()
   startPanelDrag(e.clientX, (dx) => {
     sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth.value - dx))
     applySidebarWidth()

@@ -16,6 +16,7 @@ let term: Terminal
 let fitAddon: FitAddon
 let observer: ResizeObserver
 let resizeTimer: number | undefined
+let fitTimer: number | undefined
 // 会话结束标记：shell EOF 远端关闭通道（Closed 事件）后停止发送输入并显示提示
 // （否则输入继续走 IPC 报 channel not found 刷日志，终端表现为卡死）
 let ended = false
@@ -170,7 +171,10 @@ onMounted(async () => {
     // 隐藏标签（v-show 切换）容器尺寸归零：跳过 fit，防止后台 TUI 被 resize 成 1x1
     const el = terminalRef.value
     if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return
-    fitAddon.fit()
+    // fit 防抖：面板拖动/窗口缩放期间尺寸连续变化，每帧 fit 触发列数变化即全量重绘
+    // 导致闪烁；变化停止 80ms 后一次性重排（VSCode 拖动分隔条同样延迟重排）
+    if (fitTimer !== undefined) window.clearTimeout(fitTimer)
+    fitTimer = window.setTimeout(() => fitAddon.fit(), 80)
   })
   observer.observe(terminalRef.value!)
 
@@ -181,6 +185,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unregisterChannelSink(props.channelId)
   if (resizeTimer !== undefined) window.clearTimeout(resizeTimer)
+  if (fitTimer !== undefined) window.clearTimeout(fitTimer)
   observer?.disconnect()
   term?.dispose()
 })

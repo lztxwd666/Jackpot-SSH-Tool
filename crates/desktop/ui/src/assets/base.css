@@ -47,11 +47,12 @@
   background: transparent;
 }
 
-/* 面板分隔条（splitter）：4px 热区 + 1px 分隔线（线即拖拽手柄，VSCode 惯例）；
+/* 面板分隔条（splitter）：8px 热区 + 1px 分隔线（线即拖拽手柄，VSCode 惯例）；
+   热区加宽以降低误命中相邻 draggable 树节点（过窄会误触发文件拖放）；
    面板间分隔线由 splitter 单线承担，接入处不再叠加 border */
 .splitter {
   flex-shrink: 0;
-  width: 5px;
+  width: 9px;
   cursor: col-resize;
   background: transparent;
   border-left: 1px solid var(--color-border);
