@@ -144,6 +144,8 @@ File/folder type icons resolve through a theme interface (`composables/fileIcon.
 
 UI theming is a OneDark layered palette (CSS variables in `assets/base.css`): framework chrome, host sidebar and file tree panels form three brightness tiers (darkest to lightest), selected via a `data-theme` attribute on `:root` whose override blocks are the mechanism reserved for future theme switching. The terminal keeps an independent color scheme — classic black background with the OneDark ANSI palette — that does not follow the theme.
 
+UI layout follows a fixed-metric system (VSCode split-view conventions): horizontal bars use a shared `--bar-height: 32px` so border lines align across regions; panels resize horizontally via `.splitter` (single-line, widths persisted to localStorage; terminal width adapts via flex); bottom status/footer bars are fixed. Content-driven areas (multi-row tabs, notice stacks) are the natural exception.
+
 `Terminal.vue` wraps xterm.js with `FitAddon` and `ResizeObserver`; hidden tabs skip fit to avoid 1x1 PTY resizes; EOF (remote exit) stops input and shows `[Session ended]`; right-click shows a custom menu (copy/paste/clear).
 
 ## Key Conventions
