@@ -47,6 +47,20 @@
   background: transparent;
 }
 
+/* 面板分隔条（splitter）：4px 热区 + 1px 分隔线（线即拖拽手柄，VSCode 惯例）；
+   面板间分隔线由 splitter 单线承担，接入处不再叠加 border */
+.splitter {
+  flex-shrink: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--color-border);
+  transition: background 0.15s;
+}
+.splitter:hover {
+  background: rgba(97, 175, 239, 0.2);
+}
+
 /* 横向栏统一高度（布局度量规范）：固定 bar 一律此高度 + border-box + flex 居中，
    水平分隔线位置由高度唯一决定，跨区域天然对齐；内容驱动区域（多行 tab 等）为例外 */
 :root {
