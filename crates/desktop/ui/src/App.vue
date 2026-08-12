@@ -12,6 +12,7 @@ import { dispatchChannelData, dispatchChannelClosed } from './composables/channe
 import { dialogState, closeDialog, confirmDialog, showToast, removeToast } from './composables/dialog'
 import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
 import { type DragItem } from './composables/fs'
+import { startPanelDrag } from './composables/panelResize'
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
 interface PingResult {
@@ -41,6 +42,25 @@ let promptResolve: ((result: PasswordPromptResult) => void) | null = null
 // 待确认主机密钥时的连接参数（确认后自动重连/重连续跑）
 // reconnectTabId：手动重连场景携带标签上下文，密钥确认后更新现有标签而非新建
 const pendingConnectHost = ref<null | { host: Host; password: string; reconnectTabId?: string }>(null)
+
+// 布局宽度状态（VSCode 持久化布局惯例）：localStorage 初始化，拖拽结束写入
+const SIDEBAR_MIN = 180
+const SIDEBAR_MAX = 600
+const sidebarWidth = ref(Number(localStorage.getItem('layout.sidebarWidth')) || 220)
+// 主机栏宽度提升为 CSS 变量：依赖其宽度的浮层（HostFormPanel 等）跟随联动
+function applySidebarWidth() {
+  document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`)
+}
+function onSidebarDrag(e: MouseEvent) {
+  startPanelDrag(e.clientX, (dx) => {
+    sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth.value + dx))
+    applySidebarWidth()
+  }, () => {
+    localStorage.setItem('layout.sidebarWidth', String(sidebarWidth.value))
+  })
+}
+// 页面加载时初始化 CSS 变量与持久化宽度一致（否则 HostPanel 回退默认 220px）
+onMounted(applySidebarWidth)
 
 // 标签页工作区：多会话标签模型（旧单会话视图已在 Task 6 删除）
 const tabs = ref<SessionTabState[]>([])
@@ -917,6 +937,8 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 面板分隔条：左区│主机栏 拖拽调整主机栏宽度（拖拽态与持久化见 onSidebarDrag） -->
+    <div class="splitter" @mousedown="onSidebarDrag" />
     <!-- 右侧区域：主机栏（上下贯通）+ 独立底部栏（语言切换 + 后续功能：设置图标等） -->
     <div class="right-area">
       <HostPanel
@@ -1022,8 +1044,8 @@ onBeforeUnmount(() => {
 .tab-content { flex: 1; display: flex; overflow: hidden; }
 .status-bar { height: var(--bar-height); padding: 0 0.6rem; border-top: 1px solid var(--color-border); font-size: 0.7rem; display: flex; align-items: center; }
 .status-badge { font-size: 0.7rem; color: var(--color-success); }
-/* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；border-left 分隔左右区域 */
-.right-area { display: flex; flex-direction: column; border-left: 1px solid var(--color-border); }
+/* 右侧区域：主机栏（flex:1 上下贯通）+ 底部独立栏（语言切换等）；与左区分隔线由 splitter 承担 */
+.right-area { display: flex; flex-direction: column; }
 /* 底部栏固定高度：滑出面板以其为 bottom 边界（不遮挡底部栏，用户反馈） */
 .right-footer { height: var(--bar-height); box-sizing: border-box; padding: 0 0.6rem; border-top: 1px solid var(--color-border); display: flex; align-items: center; justify-content: flex-end; }
 .locale-select { background: var(--color-background); color: var(--color-text); border: 1px solid var(--color-border); border-radius: 4px; font-size: 0.7rem; padding: 0.1rem 0.2rem; cursor: pointer; }

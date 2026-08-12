@@ -168,8 +168,8 @@ function onSearchInput(e: Event) {
 </template>
 
 <style scoped>
-/* 主机栏整体：右侧区域内的上半部分（flex:1 上下贯通）；左右分隔线由 right-area 的 border-left 承担 */
-.host-panel { width: 220px; min-width: 220px; background: var(--color-sidebar); display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* 主机栏整体：右侧区域内的上半部分（flex:1 上下贯通）；宽度跟随 --sidebar-width CSS 变量（splitter 拖拽联动），未设置时回退默认 220px */
+.host-panel { width: var(--sidebar-width, 220px); min-width: var(--sidebar-width, 220px); background: var(--color-sidebar); display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; height: var(--bar-height); padding: 0 0.8rem; border-bottom: 1px solid var(--color-border); }
 .sidebar-header h2 { font-size: 0.95rem; color: var(--color-heading); }
 .search-bar { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--color-border); }
