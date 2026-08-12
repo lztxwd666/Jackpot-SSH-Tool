@@ -7,6 +7,7 @@ import LocalFileTree from './LocalFileTree.vue'
 import RemoteFileTree from './RemoteFileTree.vue'
 import { type DragItem } from '../composables/fs'
 import { t } from '../composables/i18n'
+import { startPanelDrag } from '../composables/panelResize'
 
 export interface SessionTabState {
   id: string
@@ -36,7 +37,15 @@ export interface TabNotice {
   message: string       // 已翻译文案（t() 生成）
 }
 
-const props = defineProps<{ tab: SessionTabState; localRefreshKey: number; remoteRefreshKey: number; locked?: boolean }>()
+const props = defineProps<{
+  tab: SessionTabState
+  localRefreshKey: number
+  remoteRefreshKey: number
+  locked?: boolean
+  // 树宽度由 App.vue 全局持有（多标签共享，localStorage 持久化）：本组件只读展示 + 拖拽 emit 增量
+  localWidth: number
+  remoteWidth: number
+}>()
 const emit = defineEmits<{
   (e: 'close'): void
   (e: 'reconnect'): void
@@ -44,6 +53,8 @@ const emit = defineEmits<{
   (e: 'download-many', items: DragItem[], localDir?: string): void
   (e: 'upload', remoteDir: string, localPath: string, expectedDir?: string, isDir?: boolean): void
   (e: 'upload-many', items: DragItem[], remoteDir: string, expectedDir?: string): void
+  (e: 'resize-local', width: number): void
+  (e: 'resize-remote', width: number): void
 }>()
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
@@ -54,14 +65,25 @@ const remoteCurrentDir = ref('/')
 function uploadFromLocal(localPath: string, isDir = false) {
   emit('upload', remoteCurrentDir.value || '/', localPath, localCurrentDir.value, isDir)
 }
+
+// 树宽度拖拽（增量式：左侧树向右拖增宽，右侧树向左拖增宽即 dx 取反）
+// clamp 与持久化在 App.vue 的 onResizeLocal/onResizeRemote 统一处理
+function onLocalSplitter(e: MouseEvent) {
+  const start = props.localWidth
+  startPanelDrag(e.clientX, (dx) => emit('resize-local', start + dx), () => {})
+}
+function onRemoteSplitter(e: MouseEvent) {
+  const start = props.remoteWidth
+  startPanelDrag(e.clientX, (dx) => emit('resize-remote', start - dx), () => {})
+}
 </script>
 
 <template>
-  <!-- 布局顺序：本地文件树 | 远程文件树 | 终端（恢复 Stage 5 原设计；Task 5 曾误写为终端在左） -->
+  <!-- 布局顺序：本地文件树 | 终端 | 远程文件树（终端居中自适应，两侧 splitter 拖拽调宽） -->
   <div class="session-tab">
     <!-- 断连遮罩（用户反馈）：断开后文件树与终端各自遮罩提示，不可操作；
          终端内容保留可见（断开前输出可回看）；重连按钮集中在终端遮罩 -->
-    <div class="panel panel-relative" style="width:180px; min-width:180px;">
+    <div class="panel panel-relative" :style="{ width: props.localWidth + 'px', minWidth: props.localWidth + 'px' }">
       <LocalFileTree
         :refreshKey="localRefreshKey"
         @download="(p: string, dir: string, isDir?: boolean) => emit('download', p, dir, isDir)"
@@ -72,19 +94,7 @@ function uploadFromLocal(localPath: string, isDir = false) {
       />
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
-    <div class="panel panel-relative" style="width:180px; min-width:180px;">
-      <RemoteFileTree
-        :sessionId="tab.sessionId"
-        :refreshKey="remoteRefreshKey"
-        :locked="locked"
-        @download="(p: string, isDir?: boolean) => emit('download', p, localCurrentDir, isDir)"
-        @download-many="(items: DragItem[]) => emit('download-many', items, localCurrentDir)"
-        @upload="(dir: string, p: string, isDir?: boolean) => emit('upload', dir, p, localCurrentDir, isDir)"
-        @upload-many="(items: DragItem[], dir: string) => emit('upload-many', items, dir, localCurrentDir)"
-        @current-dir="(p: string) => remoteCurrentDir = p"
-      />
-      <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
-    </div>
+    <div class="splitter" @mousedown="onLocalSplitter" />
     <div class="terminal-wrapper">
       <!-- 终端头部：主机名 + IP 地址（用户反馈：仅主机名过于单调，添加地址更直观）；
            断连/重连按钮不在此处（用户反馈：遮罩中央的重连按钮方案更协调，断开操作走标签栏 × 关闭） -->
@@ -113,13 +123,27 @@ function uploadFromLocal(localPath: string, isDir = false) {
         </div>
       </div>
     </div>
+    <div class="splitter" @mousedown="onRemoteSplitter" />
+    <div class="panel panel-relative" :style="{ width: props.remoteWidth + 'px', minWidth: props.remoteWidth + 'px' }">
+      <RemoteFileTree
+        :sessionId="tab.sessionId"
+        :refreshKey="remoteRefreshKey"
+        :locked="locked"
+        @download="(p: string, isDir?: boolean) => emit('download', p, localCurrentDir, isDir)"
+        @download-many="(items: DragItem[]) => emit('download-many', items, localCurrentDir)"
+        @upload="(dir: string, p: string, isDir?: boolean) => emit('upload', dir, p, localCurrentDir, isDir)"
+        @upload-many="(items: DragItem[], dir: string) => emit('upload-many', items, dir, localCurrentDir)"
+        @current-dir="(p: string) => remoteCurrentDir = p"
+      />
+      <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .session-tab { display: flex; flex: 1; min-width: 0; }
-/* 终端与远程文件树之间的分隔线（线条对齐：各区域分隔统一 1px var(--color-border)） */
-.terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-left: 1px solid var(--color-border); }
+/* 终端区：flex:1 自适应，与两侧文件树的边界线由 splitter 承担（base.css 全局规则） */
+.terminal-wrapper { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .terminal-header { display: flex; justify-content: space-between; align-items: center; height: var(--bar-height); padding: 0 0.8rem; background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
 .connection-info { display: inline-flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
 .connection-host { font-size: 0.8rem; color: var(--color-heading); font-weight: 500; white-space: nowrap; }

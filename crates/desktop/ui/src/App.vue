@@ -62,6 +62,21 @@ function onSidebarDrag(e: MouseEvent) {
 // 页面加载时初始化 CSS 变量与持久化宽度一致（否则 HostPanel 回退默认 220px）
 onMounted(applySidebarWidth)
 
+// 文件树宽度状态（与主机栏宽度同持久化惯例）：localStorage 初始化，
+// 拖拽中 clamp 到 [TREE_MIN, TREE_MAX] 并实时写入（SessionTab 经 props 消费、emit 增量更新）
+const TREE_MIN = 120
+const TREE_MAX = 480
+const localWidth = ref(Number(localStorage.getItem('layout.localWidth')) || 180)
+const remoteWidth = ref(Number(localStorage.getItem('layout.remoteWidth')) || 180)
+function onResizeLocal(w: number) {
+  localWidth.value = Math.min(TREE_MAX, Math.max(TREE_MIN, w))
+  localStorage.setItem('layout.localWidth', String(localWidth.value))
+}
+function onResizeRemote(w: number) {
+  remoteWidth.value = Math.min(TREE_MAX, Math.max(TREE_MIN, w))
+  localStorage.setItem('layout.remoteWidth', String(remoteWidth.value))
+}
+
 // 标签页工作区：多会话标签模型（旧单会话视图已在 Task 6 删除）
 const tabs = ref<SessionTabState[]>([])
 const activeTabId = ref<string | null>(null)
@@ -921,6 +936,10 @@ onBeforeUnmount(() => {
             :local-refresh-key="localRefresh[tab.sessionId] ?? 0"
             :remote-refresh-key="remoteRefresh[tab.sessionId] ?? 0"
             :locked="tab.locked"
+            :local-width="localWidth"
+            :remote-width="remoteWidth"
+            @resize-local="onResizeLocal"
+            @resize-remote="onResizeRemote"
             @close="closeTab(tab.id)"
             @reconnect="reconnectTab(tab)"
             @download="(p: string, dir?: string, isDir?: boolean) => downloadFile(tab.sessionId, p, dir, isDir)"
