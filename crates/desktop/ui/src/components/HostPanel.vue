@@ -2,7 +2,7 @@
 // 右侧主机栏：左键选中 / 双击直连 / 右键菜单（连接、编辑、Ping、删除）
 // 含搜索栏；主机列表按分组自动组织（分组标题 + 组内主机）
 // 语言切换已移至左侧底部状态栏（用户反馈：主机栏与底栏分离，底栏后续放设置图标等功能）
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
 import { useClearSelectionOnOutside } from '../composables/selection'
@@ -46,14 +46,30 @@ const menu = ref<{ x: number; y: number; host: Host } | null>(null)
 // 位置在悬停起始处固定（不随鼠标移动，避免抖动）；clamp 防溢出窗口边缘（主机栏在右，卡默认偏右下）
 const TIP_WIDTH = 200
 const TIP_HEIGHT = 150
+// 悬停延迟：光标停留 300ms 才显示信息卡（快速扫过主机列表不触发，成熟 UI 惯例）
+const TIP_DELAY = 300
 const tip = ref<{ x: number; y: number; host: Host } | null>(null)
+let tipTimer: number | undefined
 function showTip(e: MouseEvent, host: Host) {
   // 右键菜单打开时不显示悬停卡（两浮层不重叠）
   if (menu.value) return
-  const p = clampFloatPos(e.clientX + 12, e.clientY + 12, TIP_WIDTH, TIP_HEIGHT)
-  tip.value = { x: p.x, y: p.y, host }
+  if (tipTimer !== undefined) window.clearTimeout(tipTimer)
+  tipTimer = window.setTimeout(() => {
+    const p = clampFloatPos(e.clientX + 12, e.clientY + 12, TIP_WIDTH, TIP_HEIGHT)
+    tip.value = { x: p.x, y: p.y, host }
+  }, TIP_DELAY)
 }
-function hideTip() { tip.value = null }
+function hideTip() {
+  if (tipTimer !== undefined) {
+    window.clearTimeout(tipTimer)
+    tipTimer = undefined
+  }
+  tip.value = null
+}
+// 组件卸载时清理悬停定时器（防泄漏：卸载后定时器不再有实际作用）
+onBeforeUnmount(() => {
+  if (tipTimer !== undefined) window.clearTimeout(tipTimer)
+})
 
 // 右键菜单位置 clamp（估算宽高，防贴窗口右缘溢出被裁剪）
 const menuStyle = computed(() => {
