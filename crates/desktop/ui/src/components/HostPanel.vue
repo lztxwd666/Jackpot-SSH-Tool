@@ -5,6 +5,7 @@
 import { computed, ref } from 'vue'
 import { clampFloatPos } from '../composables/pos'
 import { useClickOutsideClose } from '../composables/menu'
+import { useClearSelectionOnOutside } from '../composables/selection'
 import { t } from '../composables/i18n'
 
 // 与后端 list_hosts 返回的 Host 结构一致（前端 host 列表即为完整 Host，不做收窄）
@@ -106,10 +107,26 @@ function pick(action: 'connect' | 'edit' | 'ping' | 'delete') {
 function onSearchInput(e: Event) {
   emit('search', (e.target as HTMLInputElement).value)
 }
+
+// 面板点击：关闭菜单；空白区域（未命中主机行）同时清除选中（无持久聚焦）
+// li 的 @click 冒泡到此，closest('li') 命中则保留选中
+function onPanelClick(e: MouseEvent) {
+  closeMenu()
+  if (!(e.target as HTMLElement).closest('li')) selectedId.value = null
+}
+
+// 双击连接：连接后清除选中（聚焦是"离开"操作，不再保留高亮，用户反馈）
+function onHostDblClick(host: Host) {
+  selectedId.value = null
+  emit('connect', host)
+}
+
+// 点击主机栏外部清除选中（与文件树失焦清除惯例一致）
+useClearSelectionOnOutside(() => { selectedId.value = null }, '.host-panel')
 </script>
 
 <template>
-  <div class="host-panel" @click="closeMenu">
+  <div class="host-panel" @click="onPanelClick">
     <div class="sidebar-header">
       <h2>{{ t('hosts.title') }}</h2>
       <button class="btn btn-primary" @click="emit('new')">{{ t('hosts.add') }}</button>
@@ -124,7 +141,7 @@ function onSearchInput(e: Event) {
           <li v-for="host in groupHosts" :key="host.id"
             :class="{ active: selectedId === host.id }"
             @click="selectedId = host.id"
-            @dblclick="emit('connect', host)"
+            @dblclick="onHostDblClick(host)"
             @mouseenter="showTip($event, host)"
             @mouseleave="hideTip"
             @contextmenu="onContextMenu($event, host)">

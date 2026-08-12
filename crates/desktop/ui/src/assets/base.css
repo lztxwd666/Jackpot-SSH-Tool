@@ -47,19 +47,31 @@
   background: transparent;
 }
 
-/* 面板分隔条（splitter）：8px 热区 + 1px 分隔线（线即拖拽手柄，VSCode 惯例）；
-   热区加宽以降低误命中相邻 draggable 树节点（过窄会误触发文件拖放）；
-   面板间分隔线由 splitter 单线承担，接入处不再叠加 border */
+/* 面板分隔条（splitter，VSCode sash 同款语义）：仅 1px 分隔线占位，面板近乎无缝；
+   命中区经伪元素扩展（覆盖相邻面板边缘 2px——树行 padding 区内，不遮挡内容），
+   hover 显示窄高亮条（线变 accent + 淡色背景）提示可拖拽 */
 .splitter {
+  position: relative;
   flex-shrink: 0;
-  width: 9px;
+  width: 1px;
   cursor: col-resize;
-  background: transparent;
-  border-left: 1px solid var(--color-border);
+  background: var(--color-border);
+  transition: background 0.15s;
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  right: -2px;
   transition: background 0.15s;
 }
 .splitter:hover {
-  background: color-mix(in srgb, var(--color-accent), transparent 80%);
+  background: var(--color-accent);
+}
+.splitter:hover::after {
+  background: color-mix(in srgb, var(--color-accent), transparent 82%);
 }
 
 /* 横向栏统一高度（布局度量规范）：固定 bar 一律此高度 + border-box + flex 居中，
