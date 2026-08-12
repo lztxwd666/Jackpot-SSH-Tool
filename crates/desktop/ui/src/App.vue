@@ -808,14 +808,21 @@ onMounted(async () => {
   // 兜底：初始化异常/卡住时窗口不永久隐藏（超时强制显示；正常路径在初始化完成后
   // clearTimeout 并立即 show，窗口打开即完整 UI——业内惯例：渲染完整后再显示窗口）
   const bootTimeout = window.setTimeout(() => { getCurrentWindow().show() }, 5000)
-  // 查询真实运行时状态（不再硬编码 running）
-  try {
-    const appStatus = await invoke('get_app_status') as string
-    status.value = appStatus === 'running' ? 'running' : 'stopped'
-  } catch (_) { status.value = 'unknown' }
-  await loadHosts()
-  // 获取用户主目录（下载兜底目标）
-  try { homeDir.value = await invoke('get_home_dir') } catch (_) {}
+  // 初始化数据并行拉取（运行状态/主机列表/主目录三个请求相互独立，串行等待无收益）
+  await Promise.all([
+    (async () => {
+      // 查询真实运行时状态（不再硬编码 running）
+      try {
+        const appStatus = await invoke('get_app_status') as string
+        status.value = appStatus === 'running' ? 'running' : 'stopped'
+      } catch (_) { status.value = 'unknown' }
+    })(),
+    loadHosts(),
+    (async () => {
+      // 获取用户主目录（下载兜底目标）
+      try { homeDir.value = await invoke('get_home_dir') } catch (_) {}
+    })(),
+  ])
   unlistenCore = await listen<any>('core-event', (event) => {
     // 后端直接 emit 事件对象（Tauri 序列化一次），payload 已是解析后对象，无需二次 parse
     const parsed = event.payload
