@@ -172,9 +172,15 @@ onMounted(async () => {
     const el = terminalRef.value
     if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return
     // fit 防抖：面板拖动/窗口缩放期间尺寸连续变化，每帧 fit 触发列数变化即全量重绘
-    // 导致闪烁；变化停止 80ms 后一次性重排（VSCode 拖动分隔条同样延迟重排）
+    // 导致闪烁；变化停止 80ms 后一次性重排（VSCode 拖动分隔条同样延迟重排）。
+    // 回调内复查尺寸：防抖窗口内容器可能被 v-show 隐藏（切标签），隐藏态 fit
+    // 会把 PTY resize 成极小行列，复查跳过（重新显示时 observer 会再次触发）
     if (fitTimer !== undefined) window.clearTimeout(fitTimer)
-    fitTimer = window.setTimeout(() => fitAddon.fit(), 80)
+    fitTimer = window.setTimeout(() => {
+      const el = terminalRef.value
+      if (!el || el.offsetWidth === 0 || el.offsetHeight === 0) return
+      fitAddon.fit()
+    }, 80)
   })
   observer.observe(terminalRef.value!)
 
