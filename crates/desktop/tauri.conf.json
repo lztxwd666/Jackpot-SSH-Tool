@@ -18,6 +18,7 @@
         "resizable": true,
         "fullscreen": false,
         "dragDropEnabled": false,
+        "visible": false,
         "backgroundColor": "#1e2127"
       }
     ],

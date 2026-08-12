@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import HostPanel, { type Host } from './components/HostPanel.vue'
@@ -804,6 +805,9 @@ let unlistenCore: () => void
 let unlistenTransfer: () => void
 
 onMounted(async () => {
+  // 兜底：初始化异常/卡住时窗口不永久隐藏（超时强制显示；正常路径在初始化完成后
+  // clearTimeout 并立即 show，窗口打开即完整 UI——业内惯例：渲染完整后再显示窗口）
+  const bootTimeout = window.setTimeout(() => { getCurrentWindow().show() }, 5000)
   // 查询真实运行时状态（不再硬编码 running）
   try {
     const appStatus = await invoke('get_app_status') as string
@@ -907,6 +911,9 @@ onMounted(async () => {
       verifyingToasts[event.payload.id] = showToast(t('transfer.verifying'), 'verifying', 0)
     }
   })
+  // 初始化完成（状态/主机列表/监听器全部就绪）：取消兜底并显示窗口，打开即完整 UI
+  window.clearTimeout(bootTimeout)
+  getCurrentWindow().show()
 })
 
 onBeforeUnmount(() => {
