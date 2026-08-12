@@ -55,6 +55,8 @@ const emit = defineEmits<{
   (e: 'upload-many', items: DragItem[], remoteDir: string, expectedDir?: string): void
   (e: 'resize-local', width: number): void
   (e: 'resize-remote', width: number): void
+  (e: 'resize-local-end'): void
+  (e: 'resize-remote-end'): void
 }>()
 
 // 本地/远程文件树当前目录（每 tab 独立，v-show 切换保持）
@@ -70,16 +72,15 @@ function uploadFromLocal(localPath: string, isDir = false) {
 // 故两处均用 +dx；终端在最右 flex 自适应，不参与调宽）
 // onMove 的 dx 是每帧增量，须累加到 props 活值（emit 后父级 onResizeLocal/onResizeRemote
 // 立即回写 props，下一帧读到的即累积值）；冻结 start 会每帧从起点重算，宽度不跟随鼠标。
-// clamp 与持久化在 App.vue 统一处理（主机栏在分隔线右侧，其方向为 -dx）
-// mousedown preventDefault：阻止浏览器把按下后的移动解释为原生拖放/文本选择
-// （splitter 与 draggable 树节点相邻，误命中会触发文件拖放）
-function onLocalSplitter(e: MouseEvent) {
-  e.preventDefault()
-  startPanelDrag(e.clientX, (dx) => emit('resize-local', props.localWidth + dx), () => {})
-}
-function onRemoteSplitter(e: MouseEvent) {
-  e.preventDefault()
-  startPanelDrag(e.clientX, (dx) => emit('resize-remote', props.remoteWidth + dx), () => {})
+// clamp 在 App.vue 统一处理，持久化由拖拽结束事件（resize-*-end）触发（主机栏同模式）
+function onTreeSplitter(e: PointerEvent, side: 'local' | 'remote') {
+  startPanelDrag(e, (dx) => {
+    if (side === 'local') emit('resize-local', props.localWidth + dx)
+    else emit('resize-remote', props.remoteWidth + dx)
+  }, () => {
+    if (side === 'local') emit('resize-local-end')
+    else emit('resize-remote-end')
+  })
 }
 </script>
 
@@ -99,7 +100,7 @@ function onRemoteSplitter(e: MouseEvent) {
       />
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
-    <div class="splitter" @mousedown="onLocalSplitter" />
+    <div class="splitter" @pointerdown="onTreeSplitter($event, 'local')" />
     <div class="panel panel-relative" :style="{ width: props.remoteWidth + 'px', minWidth: props.remoteWidth + 'px' }">
       <RemoteFileTree
         :sessionId="tab.sessionId"
@@ -113,7 +114,7 @@ function onRemoteSplitter(e: MouseEvent) {
       />
       <div v-if="tab.status === 'disconnected'" class="disconnect-overlay"><span>{{ t('tab.overlayDisconnected') }}</span></div>
     </div>
-    <div class="splitter" @mousedown="onRemoteSplitter" />
+    <div class="splitter" @pointerdown="onTreeSplitter($event, 'remote')" />
     <div class="terminal-wrapper">
       <!-- 终端头部：主机名 + IP 地址（用户反馈：仅主机名过于单调，添加地址更直观）；
            断连/重连按钮不在此处（用户反馈：遮罩中央的重连按钮方案更协调，断开操作走标签栏 × 关闭） -->

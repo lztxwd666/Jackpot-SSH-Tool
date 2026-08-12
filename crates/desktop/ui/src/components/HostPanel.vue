@@ -200,8 +200,8 @@ useClearSelectionOnOutside(() => { selectedId.value = null }, '.host-panel')
 <style scoped>
 /* 主机栏整体：右侧区域内的上半部分（flex:1 上下贯通）；宽度跟随 --sidebar-width CSS 变量（splitter 拖拽联动），未设置时回退默认 220px */
 .host-panel {
-  width: var(--sidebar-width, 220px);
-  min-width: var(--sidebar-width, 220px);
+  width: var(--sidebar-width);
+  min-width: var(--sidebar-width);
   background: var(--color-sidebar);
   display: flex;
   flex-direction: column;

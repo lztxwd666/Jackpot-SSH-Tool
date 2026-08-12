@@ -74,10 +74,12 @@
   background: color-mix(in srgb, var(--color-accent), transparent 82%);
 }
 
-/* 横向栏统一高度（布局度量规范）：固定 bar 一律此高度 + border-box + flex 居中，
-   水平分隔线位置由高度唯一决定，跨区域天然对齐；内容驱动区域（多行 tab 等）为例外 */
+/* 布局度量 token（布局度量规范）：固定 bar 一律 --bar-height（border-box + flex 居中），
+   水平分隔线位置由高度唯一决定，跨区域天然对齐；内容驱动区域（多行 tab 等）为例外。
+   --sidebar-width 为默认值：App.vue 挂载时按持久化宽度覆写（拖拽联动） */
 :root {
   --bar-height: 32px;
+  --sidebar-width: 220px;
 }
 
 *,

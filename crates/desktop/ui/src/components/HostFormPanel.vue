@@ -156,7 +156,7 @@ function submit() {
 /* position: fixed 覆盖右侧主机栏（不含右侧底部栏）；transform: translateX 滑出动画（约 200ms ease） */
 /* 宽度跟随 --sidebar-width CSS 变量（与右侧主机栏一致，splitter 拖拽联动），未设置时回退默认 220px；
    bottom 32px 避开底部栏（语言切换/设置，用户反馈） */
-.form-overlay { position: fixed; top: 0; right: 0; bottom: 32px; width: var(--sidebar-width, 220px); background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
+.form-overlay { position: fixed; top: 0; right: 0; bottom: var(--bar-height); width: var(--sidebar-width); background: var(--color-background); border-left: 1px solid var(--color-border); box-shadow: -4px 0 16px rgba(0,0,0,0.2); transform: translateX(100%); transition: transform 0.2s ease; z-index: 900; }
 .form-overlay.open { transform: translateX(0); }
 .form-panel { display: flex; flex-direction: column; height: 100%; padding: 1rem; overflow-y: auto; }
 .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }

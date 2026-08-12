@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import HostPanel, { type Host } from './components/HostPanel.vue'
@@ -13,7 +12,9 @@ import { dispatchChannelData, dispatchChannelClosed } from './composables/channe
 import { dialogState, closeDialog, confirmDialog, showToast, removeToast } from './composables/dialog'
 import { t, getLocale, setLocale, locales, localeNames, type Locale } from './composables/i18n'
 import { type DragItem } from './composables/fs'
+import { clamp } from './composables/pos'
 import { startPanelDrag } from './composables/panelResize'
+import { completeBoot } from './composables/boot'
 
 // 与后端 commands/host.rs 的 PingResult 结构对应
 interface PingResult {
@@ -44,19 +45,18 @@ let promptResolve: ((result: PasswordPromptResult) => void) | null = null
 // reconnectTabId：手动重连场景携带标签上下文，密钥确认后更新现有标签而非新建
 const pendingConnectHost = ref<null | { host: Host; password: string; reconnectTabId?: string }>(null)
 
-// 布局宽度状态（VSCode 持久化布局惯例）：localStorage 初始化，拖拽结束写入
+// 布局宽度状态（VSCode 持久化布局惯例）：localStorage 初始化（读入即 clamp 越界值），
+// 拖拽中实时更新、拖拽结束写入
 const SIDEBAR_MIN = 180
 const SIDEBAR_MAX = 600
-const sidebarWidth = ref(Number(localStorage.getItem('layout.sidebarWidth')) || 220)
+const sidebarWidth = ref(clamp(Number(localStorage.getItem('layout.sidebarWidth')) || 220, SIDEBAR_MIN, SIDEBAR_MAX))
 // 主机栏宽度提升为 CSS 变量：依赖其宽度的浮层（HostFormPanel 等）跟随联动
 function applySidebarWidth() {
   document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth.value}px`)
 }
-function onSidebarDrag(e: MouseEvent) {
-  // preventDefault：阻止浏览器把按下后的移动解释为原生拖放/文本选择（splitter 与 draggable 元素相邻）
-  e.preventDefault()
-  startPanelDrag(e.clientX, (dx) => {
-    sidebarWidth.value = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth.value - dx))
+function onSidebarDrag(e: PointerEvent) {
+  startPanelDrag(e, (dx) => {
+    sidebarWidth.value = clamp(sidebarWidth.value - dx, SIDEBAR_MIN, SIDEBAR_MAX)
     applySidebarWidth()
   }, () => {
     localStorage.setItem('layout.sidebarWidth', String(sidebarWidth.value))
@@ -65,18 +65,22 @@ function onSidebarDrag(e: MouseEvent) {
 // 页面加载时初始化 CSS 变量与持久化宽度一致（否则 HostPanel 回退默认 220px）
 onMounted(applySidebarWidth)
 
-// 文件树宽度状态（与主机栏宽度同持久化惯例）：localStorage 初始化，
-// 拖拽中 clamp 到 [TREE_MIN, TREE_MAX] 并实时写入（SessionTab 经 props 消费、emit 增量更新）
+// 文件树宽度状态（与主机栏宽度同持久化惯例）：localStorage 初始化（读入即 clamp），
+// 拖拽中实时更新（SessionTab 经 props 消费、emit 增量更新）、拖拽结束写入
 const TREE_MIN = 120
 const TREE_MAX = 480
-const localWidth = ref(Number(localStorage.getItem('layout.localWidth')) || 180)
-const remoteWidth = ref(Number(localStorage.getItem('layout.remoteWidth')) || 180)
+const localWidth = ref(clamp(Number(localStorage.getItem('layout.localWidth')) || 180, TREE_MIN, TREE_MAX))
+const remoteWidth = ref(clamp(Number(localStorage.getItem('layout.remoteWidth')) || 180, TREE_MIN, TREE_MAX))
 function onResizeLocal(w: number) {
-  localWidth.value = Math.min(TREE_MAX, Math.max(TREE_MIN, w))
-  localStorage.setItem('layout.localWidth', String(localWidth.value))
+  localWidth.value = clamp(w, TREE_MIN, TREE_MAX)
 }
 function onResizeRemote(w: number) {
-  remoteWidth.value = Math.min(TREE_MAX, Math.max(TREE_MIN, w))
+  remoteWidth.value = clamp(w, TREE_MIN, TREE_MAX)
+}
+function onResizeLocalEnd() {
+  localStorage.setItem('layout.localWidth', String(localWidth.value))
+}
+function onResizeRemoteEnd() {
   localStorage.setItem('layout.remoteWidth', String(remoteWidth.value))
 }
 
@@ -805,9 +809,6 @@ let unlistenCore: () => void
 let unlistenTransfer: () => void
 
 onMounted(async () => {
-  // 兜底：初始化异常/卡住时窗口不永久隐藏（超时强制显示；正常路径在初始化完成后
-  // clearTimeout 并立即 show，窗口打开即完整 UI——业内惯例：渲染完整后再显示窗口）
-  const bootTimeout = window.setTimeout(() => { getCurrentWindow().show() }, 5000)
   // 初始化数据并行拉取（运行状态/主机列表/主目录三个请求相互独立，串行等待无收益）
   await Promise.all([
     (async () => {
@@ -919,8 +920,7 @@ onMounted(async () => {
     }
   })
   // 初始化完成（状态/主机列表/监听器全部就绪）：取消兜底并显示窗口，打开即完整 UI
-  window.clearTimeout(bootTimeout)
-  getCurrentWindow().show()
+  completeBoot()
 })
 
 onBeforeUnmount(() => {
@@ -956,6 +956,8 @@ onBeforeUnmount(() => {
             :remote-width="remoteWidth"
             @resize-local="onResizeLocal"
             @resize-remote="onResizeRemote"
+            @resize-local-end="onResizeLocalEnd"
+            @resize-remote-end="onResizeRemoteEnd"
             @close="closeTab(tab.id)"
             @reconnect="reconnectTab(tab)"
             @download="(p: string, dir?: string, isDir?: boolean) => downloadFile(tab.sessionId, p, dir, isDir)"
@@ -973,7 +975,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 面板分隔条：左区│主机栏 拖拽调整主机栏宽度（拖拽态与持久化见 onSidebarDrag） -->
-    <div class="splitter" @mousedown="onSidebarDrag" />
+    <div class="splitter" @pointerdown="onSidebarDrag" />
     <!-- 右侧区域：主机栏（上下贯通）+ 独立底部栏（语言切换 + 后续功能：设置图标等） -->
     <div class="right-area">
       <HostPanel
@@ -1067,6 +1069,8 @@ onBeforeUnmount(() => {
 
 /* 标签页工作区布局：左侧区域三行（标签栏/工作区/状态栏），右侧主机栏独立 */
 .left-area { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* 对齐不变量：3px 顶距 + 28px tab + 1px border-bottom = 32px（--bar-height 精确对齐，
+   与 sidebar-header 底边同一水平线；改动 3px/28px 会静默破坏跨区域对齐） */
 .tab-bar { display: flex; flex-wrap: wrap; /* 标签换行，不做横向滚动 */ background: var(--color-background-soft); border-bottom: 1px solid var(--color-border); padding: 3px 4px 0; gap: 0.2rem; }
 .tab { display: inline-flex; align-items: center; gap: 0.4rem; height: 28px; padding: 0 0.6rem; background: var(--color-background); border: 1px solid var(--color-border); border-radius: 4px 4px 0 0; cursor: pointer; font-size: 0.8rem; }
 .tab.active { border-bottom-color: var(--color-background); background: var(--color-background-mute); }

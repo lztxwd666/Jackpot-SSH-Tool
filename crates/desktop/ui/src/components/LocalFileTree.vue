@@ -440,15 +440,6 @@ watch(() => props.refreshKey, () => { loadDir(currentPath.value) })
   font-size: 0.8rem;
 }
 
-.tree-header {
-  padding: 0.4rem 0.5rem;
-  font-weight: 600;
-  color: var(--color-heading);
-  border-bottom: 1px solid var(--color-border);
-  text-align: center;
-  flex-shrink: 0;
-}
-
 .tree-body {
   flex: 1;
   overflow-y: auto;

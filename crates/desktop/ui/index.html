@@ -8,10 +8,10 @@
   <title>Jackpot SSH Tool</title>
   <style>
     /* 加载期背景（critical CSS）：主题样式经 JS import 才生效，此前页面为默认白屏。
-       语义为"默认主题背景色"（与 tauri.conf.json 的窗口 backgroundColor 同值，
-       两处覆盖加载期全程：窗口初始化 -> HTML 加载 -> CSS 生效）：
-       运行后由 data-theme 切换主题，加载期始终用默认主题色。
-       新增默认主题时需同步此两处色值 */
+       语义为"默认主题背景色"——共三处同值：base.css 默认主题的 --color-background、
+       本内联样式、tauri.conf.json 的窗口 backgroundColor（覆盖加载期全程：
+       窗口初始化 -> HTML 加载 -> CSS 生效）。运行后由 data-theme 切换主题，
+       加载期始终用默认主题色。新增默认主题时需同步此三处色值 */
     html, body { background: #1e2127; }
   </style>
 </head>
